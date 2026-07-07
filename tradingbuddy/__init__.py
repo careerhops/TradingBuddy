@@ -1,0 +1,2 @@
+"""TradingBuddy Streamlit screener package."""
+

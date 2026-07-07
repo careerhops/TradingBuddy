@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import unittest
+
+import pandas as pd
+
+from tradingbuddy.scan import _build_minervini_shortlist, _build_weekly_shortlist, _fetch_start_date
+
+
+class ScanShortlistTests(unittest.TestCase):
+    def test_minervini_and_weekly_shortlists_are_separate_with_gain_loss(self) -> None:
+        rows = pd.DataFrame(
+            [
+                {
+                    "run_id": "run-1",
+                    "run_started_at": "2026-07-07T20:00:00+05:30",
+                    "exchange": "NSE",
+                    "symbol": "ABC",
+                    "tradingview_symbol": "NSE:ABC",
+                    "name": "ABC Ltd",
+                    "passes_minervini": True,
+                    "minervini_pass_count": 8,
+                    "as_of_date": pd.Timestamp("2026-07-07"),
+                    "close": 100.0,
+                    "current_price": 110.0,
+                    "price_source": "kite_ltp",
+                    "latest_weekly_signal": "BUY",
+                    "latest_weekly_signal_date": pd.Timestamp("2026-07-06"),
+                    "latest_weekly_signal_close": 95.0,
+                    "fresh_weekly_signal": True,
+                    "bars_since_weekly_signal": 0,
+                },
+                {
+                    "run_id": "run-1",
+                    "run_started_at": "2026-07-07T20:00:00+05:30",
+                    "exchange": "NSE",
+                    "symbol": "XYZ",
+                    "tradingview_symbol": "NSE:XYZ",
+                    "name": "XYZ Ltd",
+                    "passes_minervini": False,
+                    "minervini_pass_count": 5,
+                    "as_of_date": pd.Timestamp("2026-07-07"),
+                    "close": 50.0,
+                    "current_price": 55.0,
+                    "price_source": "kite_ltp",
+                    "latest_weekly_signal": "NONE",
+                    "latest_weekly_signal_date": pd.NaT,
+                    "latest_weekly_signal_close": pd.NA,
+                    "fresh_weekly_signal": False,
+                    "bars_since_weekly_signal": pd.NA,
+                },
+            ]
+        )
+
+        minervini = _build_minervini_shortlist(rows)
+        weekly = _build_weekly_shortlist(rows)
+
+        self.assertEqual(minervini["symbol"].tolist(), ["ABC"])
+        self.assertAlmostEqual(float(minervini.iloc[0]["gain_loss_pct"]), 10.0)
+        self.assertEqual(weekly["symbol"].tolist(), ["ABC"])
+        self.assertEqual(weekly.iloc[0]["signal"], "BUY")
+        self.assertAlmostEqual(float(weekly.iloc[0]["gain_loss_pct"]), 15.7894736842)
+
+    def test_fetch_start_date_refetches_latest_cached_date_for_overwrite(self) -> None:
+        existing = pd.DataFrame({"date": [pd.Timestamp("2026-07-06"), pd.Timestamp("2026-07-07")]})
+
+        from_date = _fetch_start_date(existing, pd.Timestamp("2024-07-07").date())
+
+        self.assertEqual(from_date, pd.Timestamp("2026-07-07").date())
+
+
+if __name__ == "__main__":
+    unittest.main()

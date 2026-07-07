@@ -1,0 +1,64 @@
+app:
+  name: "TradingBuddy Minervini Screener"
+  environment: "local"
+  timezone: "Asia/Kolkata"
+
+data:
+  provider: "zerodha"
+  source_timeframe: "1D"
+  history_years: 2
+  data_root_env: "DATA_ROOT"
+  request_sleep_seconds: 0.35
+
+universe:
+  mode: "nse_all"
+  exchanges:
+    - "NSE"
+  instrument_types:
+    - "EQ"
+  max_symbols: null
+  allow_symbols: []
+  block_symbols: []
+  approximate_nse_traded_universe:
+    enabled: true
+    require_nonblank_name: true
+    allowed_series_suffixes:
+      - ""
+      - "-SM"
+      - "-ST"
+      - "-BZ"
+      - "-IV"
+      - "-E1"
+      - "-P1"
+      - "-RR"
+
+strategy:
+  name: "weekly_buy_sell"
+  sensitivity: 3
+  fvg_lookback: 5
+  prevent_repeated_direction: true
+  weekly_anchor: "W-MON"
+  use_completed_weeks_only: false
+  volume_confirmation_lookback: 20
+  volume_confirmation_multiplier: 1.25
+  pair_return_lookback_weeks: 104
+
+minervini:
+  minimum_history_days: 252
+  sma_200_trend_lookback_days: 21
+  minimum_above_52w_low_pct: 30.0
+  maximum_below_52w_high_pct: 25.0
+  minimum_relative_strength_rank: 70.0
+  relative_strength_lookback_days: 252
+
+signals:
+  fresh_weekly_signal_age_bars: 1
+
+supabase:
+  enabled: true
+  url_env: "SUPABASE_URL"
+  service_role_key_env: "SUPABASE_SERVICE_ROLE_KEY"
+  scan_runs_table: "tradingbuddy_scan_runs"
+  minervini_table: "tradingbuddy_minervini_shortlists"
+  weekly_table: "tradingbuddy_weekly_buy_sell_shortlists"
+  kite_tokens_table: "tradingbuddy_kite_tokens"

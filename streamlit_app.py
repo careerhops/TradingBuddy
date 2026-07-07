@@ -1,0 +1,552 @@
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+import pandas as pd
+import streamlit as st
+from kiteconnect import KiteConnect
+
+from tradingbuddy.auth.kite_token import save_access_token, token_status
+from tradingbuddy.config import get_data_root, load_config, require_env
+from tradingbuddy.data.storage import Storage
+from tradingbuddy.data.supabase_store import SupabaseStore
+from tradingbuddy.minervini import RULE_COLUMNS, RULE_LABELS
+from tradingbuddy.scan import run_scan
+
+
+st.set_page_config(
+    page_title="TradingBuddy",
+    page_icon="",
+    layout="wide",
+)
+
+
+def main() -> None:
+    _copy_streamlit_secrets_to_env()
+    config = load_config()
+    data_root = get_data_root(config)
+    storage = Storage(data_root)
+
+    st.title("TradingBuddy")
+    st.caption("NSE EQ Minervini screener with Kite data and weekly BUY/SELL signals")
+
+    role = _auth_gate()
+    if role is None:
+        st.info("Sign in to view TradingBuddy results.")
+        st.stop()
+
+    if role == "admin":
+        _kite_login_panel(config, data_root)
+        _scan_panel(config, storage)
+    _results_panel(storage)
+    if role == "admin":
+        _rules_panel()
+
+
+def _copy_streamlit_secrets_to_env() -> None:
+    try:
+        secrets = st.secrets
+    except Exception:
+        return
+
+    for key in (
+        "KITE_API_KEY",
+        "KITE_API_SECRET",
+        "DATA_ROOT",
+        "APP_ADMIN_PASSWORD",
+        "APP_USER_ID",
+        "APP_USER_PASSWORD",
+        "KITE_REDIRECT_URL",
+        "SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+    ):
+        try:
+            value = secrets.get(key)
+        except Exception:
+            value = None
+        if value and not os.getenv(key):
+            os.environ[key] = str(value)
+
+
+def _auth_gate() -> str | None:
+    admin_password = os.getenv("APP_ADMIN_PASSWORD", "").strip()
+    user_id = os.getenv("APP_USER_ID", "").strip()
+    user_password = os.getenv("APP_USER_PASSWORD", "").strip()
+    configured = bool(admin_password or (user_id and user_password))
+    if not configured:
+        st.sidebar.info("Admin mode is open because no app login secrets are set.")
+        st.session_state["auth_role"] = "admin"
+        return "admin"
+
+    role = st.session_state.get("auth_role")
+    if role in {"admin", "user"}:
+        st.sidebar.success(f"Signed in as {role}")
+        if st.sidebar.button("Sign out"):
+            st.session_state.pop("auth_role", None)
+            st.rerun()
+        return str(role)
+
+    st.sidebar.subheader("Login")
+    if admin_password:
+        with st.sidebar.form("admin_login"):
+            entered = st.text_input("Admin password", type="password")
+            submitted = st.form_submit_button("Admin login")
+        if submitted:
+            if entered == admin_password:
+                st.session_state["auth_role"] = "admin"
+                st.rerun()
+            st.sidebar.error("Incorrect admin password")
+
+    if user_id and user_password:
+        with st.sidebar.form("user_login"):
+            entered_user = st.text_input("User id")
+            entered_password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("User login")
+        if submitted:
+            if entered_user.strip() == user_id and entered_password == user_password:
+                st.session_state["auth_role"] = "user"
+                st.rerun()
+            st.sidebar.error("Incorrect user id or password")
+
+    return None
+
+
+def _kite_login_panel(config: dict[str, Any], data_root: Path) -> None:
+    with st.sidebar:
+        st.subheader("Kite")
+        status = _kite_token_status(data_root, config)
+        if status["exists"]:
+            profile = status.get("profile", {}) or {}
+            user_name = profile.get("user_name") or profile.get("user_id") or "saved user"
+            st.success(f"Token saved: {user_name}")
+            st.caption(f"Source: {status.get('source') or '-'}")
+            st.caption(f"Generated: {status.get('generated_at') or '-'}")
+            st.caption(f"Expires: {status.get('expires_at') or '-'}")
+        else:
+            st.warning("No saved Kite token")
+        if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+            st.success("Supabase configured")
+        else:
+            st.caption("Supabase not configured")
+
+    request_token = _query_param("request_token")
+    kite_status = _query_param("status")
+    if request_token:
+        with st.sidebar:
+            st.info("Kite request token detected.")
+            if st.button("Save Kite access token", type="primary"):
+                try:
+                    result = _save_kite_session(request_token, data_root, config)
+                    st.success(result)
+                    _clear_query_params()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+    elif kite_status and kite_status != "success":
+        st.sidebar.error(f"Kite login failed: {kite_status}")
+
+    with st.sidebar.expander("Kite login", expanded=not status["exists"]):
+        api_key = os.getenv("KITE_API_KEY", "").strip()
+        redirect_url = os.getenv("KITE_REDIRECT_URL", "").strip() or "http://localhost:8501"
+        st.caption("Kite developer console redirect URL")
+        st.code(redirect_url, language=None)
+        st.caption("For local testing, configure the Kite app redirect URL as the local Streamlit URL. For Streamlit Cloud, use the deployed app URL.")
+        if api_key:
+            login_url = KiteConnect(api_key=api_key).login_url()
+            st.link_button("Login with Kite", login_url)
+        else:
+            st.error("KITE_API_KEY is missing.")
+
+        with st.form("manual_request_token"):
+            manual_token = st.text_input("Request token or full failed redirect URL")
+            submitted = st.form_submit_button("Save token")
+        if submitted:
+            request_token_from_input = _extract_request_token(manual_token)
+            if not request_token_from_input:
+                st.error("Paste the request_token or the full Kite redirect URL containing request_token=...")
+            else:
+                try:
+                    result = _save_kite_session(request_token_from_input, data_root, config)
+                    st.success(result)
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+
+
+def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
+    st.header("Scanner")
+    latest = storage.load_signals("latest_scan.csv")
+    latest_pass = storage.load_signals("latest_minervini_pass.csv")
+    latest_weekly = storage.load_signals("latest_weekly_buy_sell.csv")
+    latest_summary = storage.load_signals("latest_scan_summary.csv")
+    last_scan_time = _latest_file_mtime(storage.signals_dir / "latest_scan.csv")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Cached stocks", len(latest) if not latest.empty else 0)
+    col2.metric("Minervini", len(latest_pass) if not latest_pass.empty else 0)
+    col3.metric("Weekly BUY/SELL", len(latest_weekly) if not latest_weekly.empty else 0)
+    col4.metric("Latest candle", _latest_candle_date(latest))
+    col5.metric("Last scan", last_scan_time)
+
+    if not latest_summary.empty:
+        summary = latest_summary.iloc[-1].to_dict()
+        st.caption(
+            f"Run: {summary.get('run_id', '-')} | "
+            f"Started: {summary.get('run_started_at', '-')} | "
+            f"Supabase: {summary.get('supabase_status', '-')}"
+        )
+
+    with st.form("run_scan"):
+        refresh_data = st.checkbox("Refresh Kite data", value=latest.empty)
+        limit_symbols = st.number_input("Symbol limit (0 means all)", min_value=0, max_value=10000, value=0, step=50)
+        submitted = st.form_submit_button("Run scan", type="primary")
+
+    if not submitted:
+        return
+
+    progress_bar = st.progress(0)
+    progress_text = st.empty()
+    summary_box = st.empty()
+
+    def progress(payload: dict[str, Any]) -> None:
+        total = int(payload.get("total") or 0)
+        completed = int(payload.get("completed") or 0)
+        phase = str(payload.get("phase") or "")
+        symbol = str(payload.get("current_symbol") or "")
+        if total:
+            progress_bar.progress(min(completed / total, 1.0))
+            progress_text.write(f"{phase}: {completed}/{total} {symbol}".strip())
+        else:
+            progress_text.write(phase)
+
+    try:
+        result = run_scan(
+            config,
+            storage,
+            refresh_data=refresh_data,
+            max_symbols=int(limit_symbols) if int(limit_symbols) > 0 else None,
+            progress_callback=progress,
+        )
+        progress_bar.progress(1.0)
+        summary_box.success(
+            "Scan complete: "
+            f"{result.summary['minervini_pass_count']} passed / "
+            f"{result.summary['weekly_buy_sell_count']} weekly signals / "
+            f"{result.summary['symbols_scanned']} scanned."
+        )
+        st.rerun()
+    except Exception as exc:
+        progress_bar.empty()
+        progress_text.empty()
+        st.error(str(exc))
+
+
+def _results_panel(storage: Storage) -> None:
+    all_results = storage.load_signals("latest_scan.csv")
+    st.header("Results")
+
+    if all_results.empty:
+        st.warning("No scan results yet.")
+        return
+
+    minervini_results = storage.load_signals("latest_minervini_pass.csv")
+    weekly_results = storage.load_signals("latest_weekly_buy_sell.csv")
+    minervini_tab, weekly_tab, diagnostics_tab, runs_tab = st.tabs(
+        ["Minervini Shortlist", "Weekly BUY/SELL", "All Diagnostics", "Run History"]
+    )
+
+    with minervini_tab:
+        _show_result_table(
+            minervini_results,
+            kind="minervini",
+            empty_message="No stocks currently pass all 8 Minervini rules.",
+            file_name="tradingbuddy_minervini_shortlist.csv",
+        )
+
+    with weekly_tab:
+        signal_filter = st.segmented_control("Signal", ["All", "BUY", "SELL"], default="All")
+        frame = weekly_results.copy()
+        if signal_filter in {"BUY", "SELL"} and not frame.empty:
+            frame = frame[frame["signal"].astype(str).str.upper() == signal_filter]
+        _show_result_table(
+            frame,
+            kind="weekly",
+            empty_message="No fresh weekly BUY/SELL signals in the latest run.",
+            file_name="tradingbuddy_weekly_buy_sell_shortlist.csv",
+        )
+
+    with diagnostics_tab:
+        _show_result_table(
+            all_results,
+            kind="diagnostics",
+            empty_message="No diagnostics available.",
+            file_name="tradingbuddy_all_scan_diagnostics.csv",
+        )
+
+    with runs_tab:
+        runs = storage.load_signals("scan_runs.csv")
+        _show_result_table(
+            runs,
+            kind="runs",
+            empty_message="No run history yet.",
+            file_name="tradingbuddy_scan_runs.csv",
+        )
+
+    _show_tradingview_overlap_list(minervini_results, weekly_results)
+
+
+def _show_result_table(frame: pd.DataFrame, kind: str, empty_message: str, file_name: str) -> None:
+    if frame.empty:
+        st.info(empty_message)
+        return
+
+    search = st.text_input("Search symbol/name", value="", key=f"search_{kind}")
+    filtered = _filter_search(frame, search)
+    st.write(f"{len(filtered)} rows")
+    display = _display_frame(filtered, kind)
+    st.dataframe(display, width="stretch", hide_index=True)
+
+    csv = filtered.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download CSV",
+        data=csv,
+        file_name=file_name,
+        mime="text/csv",
+        key=f"download_{kind}",
+    )
+
+
+def _show_tradingview_overlap_list(minervini_results: pd.DataFrame, weekly_results: pd.DataFrame) -> None:
+    overlap = _tradingview_overlap_symbols(minervini_results, weekly_results)
+    st.subheader("TradingView List")
+    st.caption("Stocks that pass all Minervini rules and also have a fresh weekly BUY signal.")
+    if not overlap:
+        st.info("No overlapping Minervini + weekly BUY stocks in the latest scan.")
+        return
+
+    text = ",".join(overlap)
+    st.text_area(
+        "Comma separated symbols",
+        value=text,
+        height=90,
+        key="tradingview_overlap_symbols",
+    )
+    st.download_button(
+        "Download TradingView List",
+        data=text.encode("utf-8"),
+        file_name="tradingview_minervini_weekly_buy.txt",
+        mime="text/plain",
+        key="download_tradingview_overlap",
+    )
+
+
+def _tradingview_overlap_symbols(minervini_results: pd.DataFrame, weekly_results: pd.DataFrame) -> list[str]:
+    if minervini_results.empty or weekly_results.empty:
+        return []
+    if "symbol" not in minervini_results.columns or "symbol" not in weekly_results.columns:
+        return []
+
+    minervini = minervini_results.copy()
+    weekly = weekly_results.copy()
+    minervini["exchange"] = minervini.get("exchange", "NSE").astype(str).str.upper().str.strip()
+    minervini["symbol"] = minervini["symbol"].astype(str).str.upper().str.strip()
+    weekly["exchange"] = weekly.get("exchange", "NSE").astype(str).str.upper().str.strip()
+    weekly["symbol"] = weekly["symbol"].astype(str).str.upper().str.strip()
+
+    if "signal" in weekly.columns:
+        weekly = weekly[weekly["signal"].astype(str).str.upper() == "BUY"].copy()
+    elif "latest_weekly_signal" in weekly.columns:
+        weekly = weekly[weekly["latest_weekly_signal"].astype(str).str.upper() == "BUY"].copy()
+
+    keys = set(zip(minervini["exchange"], minervini["symbol"]))
+    overlap: list[str] = []
+    for exchange, symbol in sorted(set(zip(weekly["exchange"], weekly["symbol"]))):
+        if (exchange, symbol) in keys and exchange and symbol:
+            overlap.append(f"{exchange}:{symbol}")
+    return overlap
+
+
+def _rules_panel() -> None:
+    with st.expander("Minervini rules"):
+        rules = pd.DataFrame(
+            [{"rule": index + 1, "column": column, "definition": RULE_LABELS[column]} for index, column in enumerate(RULE_COLUMNS)]
+        )
+        st.dataframe(rules, width="stretch", hide_index=True)
+
+
+def _filter_search(frame: pd.DataFrame, search: str) -> pd.DataFrame:
+    if frame.empty or not search.strip() or "symbol" not in frame.columns:
+        return frame
+    needle = search.strip().upper()
+    mask = frame["symbol"].astype(str).str.upper().str.contains(needle, na=False)
+    if "name" in frame.columns:
+        mask = mask | frame["name"].astype(str).str.upper().str.contains(needle, na=False)
+    return frame[mask].copy()
+
+
+def _display_frame(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+
+    if kind == "weekly":
+        columns = [
+            "run_started_at",
+            "tradingview_symbol",
+            "name",
+            "signal",
+            "signal_date",
+            "signal_price",
+            "current_price",
+            "gain_loss_pct",
+            "price_source",
+            "bars_since_weekly_signal",
+            "passes_minervini",
+            "minervini_pass_count",
+        ]
+    elif kind == "runs":
+        columns = [
+            "run_started_at",
+            "run_completed_at",
+            "scan_date",
+            "refresh_mode",
+            "symbols_scanned",
+            "symbols_updated",
+            "symbols_failed",
+            "minervini_pass_count",
+            "weekly_buy_sell_count",
+            "latest_candle_date",
+            "ltp_status",
+            "supabase_status",
+            "run_id",
+        ]
+    else:
+        columns = [
+            "run_started_at",
+            "tradingview_symbol",
+            "name",
+            "passes_minervini",
+            "minervini_pass_count",
+            "shortlist_date",
+            "shortlisted_price",
+            "current_price",
+            "gain_loss_pct",
+            "price_source",
+            "relative_strength_rank",
+            "relative_strength_return_pct",
+            "latest_weekly_signal",
+            "latest_weekly_signal_date",
+            "fresh_weekly_buy",
+            "close",
+            "pct_above_52w_low",
+            "pct_below_52w_high",
+        ]
+        columns.extend([column for column in RULE_COLUMNS if column in frame.columns])
+
+    available = [column for column in columns if column in frame.columns]
+    display = frame[available].copy()
+
+    for column in display.columns:
+        if column.endswith("_date") or column == "as_of_date":
+            display[column] = pd.to_datetime(display[column], errors="coerce").dt.strftime("%Y-%m-%d")
+        if column.endswith("_at"):
+            display[column] = pd.to_datetime(display[column], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    numeric_columns = display.select_dtypes(include=["float", "float64", "int", "int64"]).columns
+    for column in numeric_columns:
+        display[column] = pd.to_numeric(display[column], errors="coerce").round(2)
+
+    return display
+
+
+def _kite_token_status(data_root: Path, config: dict[str, Any]) -> dict[str, Any]:
+    local_status = token_status(data_root)
+    if local_status.get("exists"):
+        return local_status
+
+    supabase = SupabaseStore.from_config(config)
+    if supabase is None:
+        return local_status
+
+    try:
+        token_row = supabase.load_kite_token()
+    except Exception:
+        return local_status
+    if not token_row:
+        return local_status
+    return {
+        "exists": True,
+        "generated_at": token_row.get("generated_at"),
+        "expires_at": token_row.get("expires_at"),
+        "expired": False,
+        "profile": token_row.get("profile", {}),
+        "source": "supabase",
+    }
+
+
+def _save_kite_session(request_token: str, data_root: Path, config: dict[str, Any]) -> str:
+    api_key = require_env("KITE_API_KEY")
+    api_secret = require_env("KITE_API_SECRET")
+    kite = KiteConnect(api_key=api_key)
+    session = kite.generate_session(request_token, api_secret=api_secret)
+    access_token = session["access_token"]
+    kite.set_access_token(access_token)
+    profile = kite.profile()
+    local_path = save_access_token(data_root, access_token, profile, ttl_hours=24)
+    destinations = [f"local {local_path}"]
+    supabase = SupabaseStore.from_config(config)
+    if supabase is not None:
+        supabase.save_kite_token(access_token, profile, ttl_hours=24)
+        destinations.append("Supabase")
+    return "Kite token saved for 24 hours to " + " and ".join(destinations)
+
+
+def _query_param(name: str) -> str:
+    try:
+        value = st.query_params.get(name, "")
+    except Exception:
+        return ""
+    if isinstance(value, list):
+        return str(value[0]) if value else ""
+    return str(value or "")
+
+
+def _extract_request_token(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "request_token=" not in raw:
+        return raw
+    parsed = urlparse(raw)
+    params = parse_qs(parsed.query)
+    token_values = params.get("request_token") or []
+    return str(token_values[0]).strip() if token_values else ""
+
+
+def _clear_query_params() -> None:
+    try:
+        st.query_params.clear()
+    except Exception:
+        pass
+
+
+def _latest_file_mtime(path: Path) -> str:
+    if not path.exists():
+        return "-"
+    return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+
+
+def _latest_candle_date(frame: pd.DataFrame) -> str:
+    if frame.empty or "as_of_date" not in frame.columns:
+        return "-"
+    dates = pd.to_datetime(frame["as_of_date"], errors="coerce")
+    if dates.dropna().empty:
+        return "-"
+    return str(dates.max().date())
+
+
+if __name__ == "__main__":
+    main()
