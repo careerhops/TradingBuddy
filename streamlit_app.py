@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 from kiteconnect import KiteConnect
 
+from tradingbuddy.auth.app_users import verify_password
 from tradingbuddy.auth.kite_token import save_access_token, token_status
 from tradingbuddy.config import get_data_root, load_config, require_env
 from tradingbuddy.data.storage import Storage
@@ -34,7 +35,7 @@ def main() -> None:
     st.title("TradingBuddy")
     st.caption("NSE EQ Minervini screener with Kite data and weekly BUY/SELL signals")
 
-    role = _auth_gate()
+    role = _auth_gate(config)
     if role is None:
         st.info("Sign in to view TradingBuddy results.")
         st.stop()
@@ -57,6 +58,7 @@ def _copy_streamlit_secrets_to_env() -> None:
         "KITE_API_KEY",
         "KITE_API_SECRET",
         "DATA_ROOT",
+        "APP_ADMIN_USER_ID",
         "APP_ADMIN_PASSWORD",
         "APP_USER_ID",
         "APP_USER_PASSWORD",
@@ -72,45 +74,85 @@ def _copy_streamlit_secrets_to_env() -> None:
             os.environ[key] = str(value)
 
 
-def _auth_gate() -> str | None:
+def _auth_gate(config: dict[str, Any]) -> str | None:
+    supabase = SupabaseStore.from_config(config)
+    supabase_configured = supabase is not None
     admin_password = os.getenv("APP_ADMIN_PASSWORD", "").strip()
+    admin_user_id = os.getenv("APP_ADMIN_USER_ID", "").strip() or "admin"
     user_id = os.getenv("APP_USER_ID", "").strip()
     user_password = os.getenv("APP_USER_PASSWORD", "").strip()
-    configured = bool(admin_password or (user_id and user_password))
+    configured = supabase_configured or bool(admin_password or (user_id and user_password))
     if not configured:
         st.sidebar.info("Admin mode is open because no app login secrets are set.")
         st.session_state["auth_role"] = "admin"
+        st.session_state["auth_user_id"] = "local-admin"
         return "admin"
 
     role = st.session_state.get("auth_role")
     if role in {"admin", "user"}:
-        st.sidebar.success(f"Signed in as {role}")
+        signed_in_user = st.session_state.get("auth_user_id") or role
+        st.sidebar.success(f"Signed in as {signed_in_user} ({role})")
         if st.sidebar.button("Sign out"):
             st.session_state.pop("auth_role", None)
+            st.session_state.pop("auth_user_id", None)
             st.rerun()
         return str(role)
 
     st.sidebar.subheader("Login")
-    if admin_password:
-        with st.sidebar.form("admin_login"):
-            entered = st.text_input("Admin password", type="password")
-            submitted = st.form_submit_button("Admin login")
-        if submitted:
-            if entered == admin_password:
-                st.session_state["auth_role"] = "admin"
-                st.rerun()
-            st.sidebar.error("Incorrect admin password")
+    with st.sidebar.form("app_login"):
+        entered_user = st.text_input("User id")
+        entered_password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in")
 
-    if user_id and user_password:
-        with st.sidebar.form("user_login"):
-            entered_user = st.text_input("User id")
-            entered_password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("User login")
-        if submitted:
-            if entered_user.strip() == user_id and entered_password == user_password:
-                st.session_state["auth_role"] = "user"
-                st.rerun()
-            st.sidebar.error("Incorrect user id or password")
+    if submitted:
+        auth_result = _authenticate_app_user(
+            supabase=supabase,
+            user_id=entered_user,
+            password=entered_password,
+            admin_user_id=admin_user_id,
+            admin_password=admin_password,
+            fallback_user_id=user_id,
+            fallback_user_password=user_password,
+        )
+        if auth_result is not None:
+            st.session_state["auth_role"] = auth_result["role"]
+            st.session_state["auth_user_id"] = auth_result["user_id"]
+            st.rerun()
+        st.sidebar.error("Incorrect user id or password")
+
+    return None
+
+
+def _authenticate_app_user(
+    *,
+    supabase: SupabaseStore | None,
+    user_id: str,
+    password: str,
+    admin_user_id: str,
+    admin_password: str,
+    fallback_user_id: str,
+    fallback_user_password: str,
+) -> dict[str, str] | None:
+    normalized_user_id = user_id.strip()
+    if not normalized_user_id or not password:
+        return None
+
+    if supabase is not None:
+        try:
+            app_user = supabase.load_app_user(normalized_user_id)
+        except Exception:
+            app_user = None
+        if app_user and verify_password(password, str(app_user.get("password_hash") or "")):
+            role = str(app_user.get("role") or "").strip()
+            if role in {"admin", "user"}:
+                return {"role": role, "user_id": str(app_user.get("user_id") or normalized_user_id)}
+
+    if admin_password and normalized_user_id == admin_user_id and password == admin_password:
+        return {"role": "admin", "user_id": admin_user_id}
+
+    if fallback_user_id and fallback_user_password:
+        if normalized_user_id == fallback_user_id and password == fallback_user_password:
+            return {"role": "user", "user_id": fallback_user_id}
 
     return None
 

@@ -95,3 +95,35 @@ alter table public.tradingbuddy_kite_tokens enable row level security;
 
 create index if not exists tradingbuddy_kite_tokens_expires_idx
   on public.tradingbuddy_kite_tokens(expires_at);
+
+create table if not exists public.tradingbuddy_app_users (
+  user_id text primary key,
+  role text not null check (role in ('admin', 'user')),
+  password_hash text not null,
+  display_name text,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.tradingbuddy_app_users enable row level security;
+
+create index if not exists tradingbuddy_app_users_role_idx
+  on public.tradingbuddy_app_users(role)
+  where is_active = true;
+
+-- Seed users with password hashes generated locally:
+--   python3 scripts/hash_password.py
+--
+-- Never paste plaintext passwords into Supabase SQL.
+--
+-- insert into public.tradingbuddy_app_users (user_id, role, password_hash, display_name)
+-- values
+--   ('admin', 'admin', 'pbkdf2_sha256$310000$replace_with_admin_salt$replace_with_admin_hash', 'Admin'),
+--   ('viewer', 'user', 'pbkdf2_sha256$310000$replace_with_viewer_salt$replace_with_viewer_hash', 'Viewer')
+-- on conflict (user_id) do update set
+--   role = excluded.role,
+--   password_hash = excluded.password_hash,
+--   display_name = excluded.display_name,
+--   is_active = true,
+--   updated_at = now();

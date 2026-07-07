@@ -62,3 +62,4 @@ supabase:
   minervini_table: "tradingbuddy_minervini_shortlists"
   weekly_table: "tradingbuddy_weekly_buy_sell_shortlists"
   kite_tokens_table: "tradingbuddy_kite_tokens"
+  app_users_table: "tradingbuddy_app_users"

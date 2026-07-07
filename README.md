@@ -53,9 +53,6 @@ KITE_API_KEY = "..."
 KITE_API_SECRET = "..."
 KITE_REDIRECT_URL = "https://your-streamlit-app.streamlit.app"
 DATA_ROOT = "data"
-APP_ADMIN_PASSWORD = "choose-a-password"
-APP_USER_ID = "viewer"
-APP_USER_PASSWORD = "choose-a-viewer-password"
 SUPABASE_URL = "https://your-project.supabase.co"
 SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"
 ```
@@ -74,7 +71,7 @@ KITE_REDIRECT_URL = "https://your-streamlit-app.streamlit.app"
 
 If Kite redirects to an old URL such as the earlier `stock_signals` FastAPI URL, login will fail. In that case, either update the Kite developer console redirect URL or paste the full failed redirect URL into the app's `Request token or full failed redirect URL` field.
 
-When `APP_ADMIN_PASSWORD` is set, only an admin can see the Kite login action, generate the Kite session, or refresh the cache. Set `APP_USER_ID` and `APP_USER_PASSWORD` for non-admin viewers; viewer users only see saved scan results and never see the Kite panel. The app never prints, displays, or writes `KITE_API_SECRET` or `SUPABASE_SERVICE_ROLE_KEY` into result CSVs.
+Only users with role `admin` can see the Kite login action, generate the Kite session, or refresh the cache. Users with role `user` only see saved scan results and never see the Kite panel. The app never prints, displays, or writes `KITE_API_SECRET` or `SUPABASE_SERVICE_ROLE_KEY` into result CSVs.
 
 On every Kite refresh, the app refetches from the latest cached candle date, not the next date. That means a second scan on the same date overwrites the latest cached Kite candle when Kite returns updated data.
 
@@ -90,8 +87,36 @@ The app writes:
 - `tradingbuddy_minervini_shortlists`: stocks passing all 8 Minervini rules.
 - `tradingbuddy_weekly_buy_sell_shortlists`: fresh weekly BUY/SELL signals from the weekly strategy.
 - `tradingbuddy_kite_tokens`: one private, service-role-only Kite token row with `expires_at`.
+- `tradingbuddy_app_users`: admin/viewer login records with password hashes.
 
 Use the Supabase service role key only in Streamlit Secrets or local `.streamlit/secrets.toml`. Do not commit it. This Streamlit app uses the key server-side for inserts; it is not rendered into the page.
+
+### App Users
+
+Hosted deployments should store app logins in Supabase, not in Streamlit secrets. Passwords are stored as PBKDF2-SHA256 hashes.
+
+Generate one password hash for the admin and one for the viewer:
+
+```bash
+python3 scripts/hash_password.py
+```
+
+Then insert or update the users in Supabase SQL editor:
+
+```sql
+insert into public.tradingbuddy_app_users (user_id, role, password_hash, display_name)
+values
+  ('admin', 'admin', 'paste_admin_hash_here', 'Admin'),
+  ('viewer', 'user', 'paste_viewer_hash_here', 'Viewer')
+on conflict (user_id) do update set
+  role = excluded.role,
+  password_hash = excluded.password_hash,
+  display_name = excluded.display_name,
+  is_active = true,
+  updated_at = now();
+```
+
+For local-only fallback login without Supabase, `.env` still supports `APP_ADMIN_USER_ID`, `APP_ADMIN_PASSWORD`, `APP_USER_ID`, and `APP_USER_PASSWORD`. Do not use those fallback password values in Streamlit Cloud unless you intentionally want secrets-based login.
 
 ## Scan Output
 

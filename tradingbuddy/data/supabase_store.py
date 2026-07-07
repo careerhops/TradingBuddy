@@ -52,6 +52,14 @@ MINERVINI_COLUMNS = {
     "latest_weekly_signal_date",
 }
 
+APP_USER_COLUMNS = {
+    "user_id",
+    "role",
+    "password_hash",
+    "display_name",
+    "is_active",
+}
+
 WEEKLY_COLUMNS = {
     "run_id",
     "run_started_at",
@@ -86,6 +94,7 @@ class SupabaseStore:
         minervini_table: str,
         weekly_table: str,
         kite_tokens_table: str,
+        app_users_table: str,
     ) -> None:
         self.url = url.rstrip("/")
         self.service_role_key = service_role_key
@@ -93,6 +102,7 @@ class SupabaseStore:
         self.minervini_table = minervini_table
         self.weekly_table = weekly_table
         self.kite_tokens_table = kite_tokens_table
+        self.app_users_table = app_users_table
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "SupabaseStore | None":
@@ -112,6 +122,7 @@ class SupabaseStore:
             minervini_table=str(cfg.get("minervini_table", "tradingbuddy_minervini_shortlists")),
             weekly_table=str(cfg.get("weekly_table", "tradingbuddy_weekly_buy_sell_shortlists")),
             kite_tokens_table=str(cfg.get("kite_tokens_table", "tradingbuddy_kite_tokens")),
+            app_users_table=str(cfg.get("app_users_table", "tradingbuddy_app_users")),
         )
 
     def save_scan_run(self, summary: dict[str, Any]) -> None:
@@ -174,6 +185,34 @@ class SupabaseStore:
             "expires_at": row.get("expires_at"),
             "source": "supabase",
         }
+
+    def load_app_user(self, user_id: str) -> dict[str, Any] | None:
+        normalized_user_id = user_id.strip()
+        if not normalized_user_id:
+            return None
+
+        response = requests.get(
+            f"{self.url}/rest/v1/{self.app_users_table}",
+            headers={
+                "apikey": self.service_role_key,
+                "Authorization": f"Bearer {self.service_role_key}",
+            },
+            params={
+                "user_id": f"eq.{normalized_user_id}",
+                "is_active": "eq.true",
+                "select": "user_id,role,password_hash,display_name,is_active",
+                "limit": "1",
+            },
+            timeout=30,
+        )
+        if response.status_code >= 400:
+            message = response.text[:500] if response.text else response.reason
+            raise RuntimeError(f"Supabase app user load failed: HTTP {response.status_code} {message}")
+
+        rows = response.json()
+        if not rows:
+            return None
+        return _keep_keys(rows[0], APP_USER_COLUMNS)
 
     def _post_frame(self, table: str, frame: pd.DataFrame, allowed_columns: set[str]) -> None:
         if frame.empty:
