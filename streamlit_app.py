@@ -105,15 +105,19 @@ def _auth_gate(config: dict[str, Any]) -> str | None:
         submitted = st.form_submit_button("Sign in")
 
     if submitted:
-        auth_result = _authenticate_app_user(
-            supabase=supabase,
-            user_id=entered_user,
-            password=entered_password,
-            admin_user_id=admin_user_id,
-            admin_password=admin_password,
-            fallback_user_id=user_id,
-            fallback_user_password=user_password,
-        )
+        try:
+            auth_result = _authenticate_app_user(
+                supabase=supabase,
+                user_id=entered_user,
+                password=entered_password,
+                admin_user_id=admin_user_id,
+                admin_password=admin_password,
+                fallback_user_id=user_id,
+                fallback_user_password=user_password,
+            )
+        except Exception as exc:
+            st.sidebar.error(f"Login system error: {exc}")
+            return None
         if auth_result is not None:
             st.session_state["auth_role"] = auth_result["role"]
             st.session_state["auth_user_id"] = auth_result["user_id"]
@@ -138,10 +142,7 @@ def _authenticate_app_user(
         return None
 
     if supabase is not None:
-        try:
-            app_user = supabase.load_app_user(normalized_user_id)
-        except Exception:
-            app_user = None
+        app_user = supabase.load_app_user(normalized_user_id)
         if app_user and verify_password(password, str(app_user.get("password_hash") or "")):
             role = str(app_user.get("role") or "").strip()
             if role in {"admin", "user"}:
