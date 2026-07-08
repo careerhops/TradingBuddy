@@ -436,7 +436,7 @@ def _show_result_table(frame: pd.DataFrame, kind: str, empty_message: str, file_
     filtered = _filter_search(frame, search)
     st.write(f"{len(filtered)} rows")
     display = _display_frame(filtered, kind)
-    st.dataframe(display, width="stretch", hide_index=True)
+    st.dataframe(display, width="stretch", hide_index=True, column_config=_result_column_config(display))
 
     csv = filtered.to_csv(index=False).encode("utf-8")
     st.download_button(
@@ -586,8 +586,20 @@ def _display_frame(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
     numeric_columns = display.select_dtypes(include=["float", "float64", "int", "int64"]).columns
     for column in numeric_columns:
         display[column] = pd.to_numeric(display[column], errors="coerce").round(2)
+    if "gain_loss_pct" in display.columns:
+        display["gain_loss_pct"] = pd.to_numeric(display["gain_loss_pct"], errors="coerce").round(2)
 
     return display
+
+
+def _result_column_config(display: pd.DataFrame) -> dict[str, Any]:
+    config: dict[str, Any] = {}
+    if "gain_loss_pct" in display.columns:
+        config["gain_loss_pct"] = st.column_config.NumberColumn(
+            "gain_loss_pct",
+            format="%.2f%%",
+        )
+    return config
 
 
 def _kite_token_status(data_root: Path, config: dict[str, Any]) -> dict[str, Any]:
