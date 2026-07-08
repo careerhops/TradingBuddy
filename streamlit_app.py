@@ -504,12 +504,23 @@ def _load_supabase_result_bundle(config: dict[str, Any]) -> dict[str, Any]:
         empty["summary"] = pd.DataFrame([latest_run])
         empty["minervini_results"] = supabase.load_minervini_shortlist(run_id)
         empty["weekly_results"] = supabase.load_weekly_shortlist(run_id)
-        empty["overlap_history"] = supabase.load_overlap_history()
+        try:
+            empty["overlap_history"] = supabase.load_overlap_history()
+        except Exception as exc:
+            if _is_missing_overlap_history_table_error(exc):
+                empty["error"] = "Overlap history table is not created yet. Run supabase/schema.sql in Supabase SQL editor."
+            else:
+                empty["error"] = f"Overlap history is not available yet: {exc}"
         empty["runs"] = supabase.load_scan_runs()
         return empty
     except Exception as exc:
         empty["error"] = f"Could not load Supabase results: {exc}"
         return empty
+
+
+def _is_missing_overlap_history_table_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "tradingbuddy_overlap_history" in message and ("PGRST205" in message or "HTTP 404" in message)
 
 
 def _bundle_has_results(bundle: dict[str, Any]) -> bool:
