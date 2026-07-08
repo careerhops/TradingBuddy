@@ -241,11 +241,13 @@ def latest_weekly_signal(daily: pd.DataFrame, config: dict[str, Any]) -> dict[st
     bars_since = int((len(output) - 1) - latest_index)
     max_age = max(int(config.get("signals", {}).get("fresh_weekly_signal_age_bars", 1)), 1)
     latest_signal = str(latest.get("signal", "NONE")).upper()
+    signal_date = latest.get("date", pd.NaT)
+    signal_close = _daily_close_on_date(daily, signal_date)
 
     return {
         "latest_weekly_signal": latest_signal,
-        "latest_weekly_signal_date": latest.get("date", pd.NaT),
-        "latest_weekly_signal_close": _to_float(latest.get("close")),
+        "latest_weekly_signal_date": signal_date,
+        "latest_weekly_signal_close": signal_close,
         "bars_since_weekly_signal": bars_since,
         "fresh_weekly_signal": bool(latest_signal in {"BUY", "SELL"} and bars_since <= max_age - 1),
         "fresh_weekly_buy": bool(latest_signal == "BUY" and bars_since <= max_age - 1),
@@ -255,6 +257,25 @@ def latest_weekly_signal(daily: pd.DataFrame, config: dict[str, Any]) -> dict[st
         "weekly_demand_zone": _to_float(latest.get("demand_zone")),
         "weekly_supply_zone": _to_float(latest.get("supply_zone")),
     }
+
+
+def _daily_close_on_date(daily: pd.DataFrame, target_date: object) -> Any:
+    if daily.empty or "date" not in daily.columns or "close" not in daily.columns:
+        return pd.NA
+    parsed_target = pd.to_datetime(target_date, errors="coerce")
+    if pd.isna(parsed_target):
+        return pd.NA
+
+    frame = daily[["date", "close"]].copy()
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame = frame[frame["date"].notna()].sort_values("date")
+    if frame.empty:
+        return pd.NA
+
+    exact = frame[frame["date"].dt.normalize() == pd.Timestamp(parsed_target).normalize()]
+    if exact.empty:
+        return pd.NA
+    return _to_float(exact.iloc[-1]["close"])
 
 
 def _fetch_start_date(existing: pd.DataFrame, start_date: date) -> date:

@@ -4,7 +4,7 @@ import unittest
 
 import pandas as pd
 
-from tradingbuddy.scan import _build_minervini_shortlist, _build_weekly_shortlist, _fetch_start_date
+from tradingbuddy.scan import _build_minervini_shortlist, _build_weekly_shortlist, _daily_close_on_date, _fetch_start_date
 
 
 class ScanShortlistTests(unittest.TestCase):
@@ -67,6 +67,18 @@ class ScanShortlistTests(unittest.TestCase):
         from_date = _fetch_start_date(existing, pd.Timestamp("2024-07-07").date())
 
         self.assertEqual(from_date, pd.Timestamp("2026-07-07").date())
+
+    def test_signal_price_uses_daily_close_for_signal_date(self) -> None:
+        daily = pd.DataFrame(
+            [
+                {"date": pd.Timestamp("2026-07-06"), "close": 624.55},
+                {"date": pd.Timestamp("2026-07-07"), "close": 649.85},
+            ]
+        )
+
+        signal_close = _daily_close_on_date(daily, pd.Timestamp("2026-07-06"))
+
+        self.assertEqual(signal_close, 624.55)
 
 
 if __name__ == "__main__":
