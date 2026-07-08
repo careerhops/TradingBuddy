@@ -1,0 +1,59 @@
+name: Run TradingBuddy scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      cached_only:
+        description: "Use cached data only"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      max_symbols:
+        description: "Optional symbol limit, 0 means all"
+        required: true
+        default: "0"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KITE_API_KEY: ${{ secrets.KITE_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DATA_ROOT: data
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Restore market data cache
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: tradingbuddy-data-${{ github.run_id }}
+          restore-keys: |
+            tradingbuddy-data-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scan
+        run: |
+          args=()
+          if [ "${{ inputs.cached_only }}" = "true" ]; then
+            args+=("--cached-only")
+          fi
+          if [ "${{ inputs.max_symbols }}" != "0" ]; then
+            args+=("--max-symbols" "${{ inputs.max_symbols }}")
+          fi
+          python scripts/run_scan.py "${args[@]}"

@@ -214,6 +214,54 @@ class SupabaseStore:
             return None
         return _keep_keys(rows[0], APP_USER_COLUMNS)
 
+    def load_latest_scan_run(self) -> dict[str, Any] | None:
+        rows = self._get(
+            self.scan_runs_table,
+            params={
+                "select": "*",
+                "order": "run_started_at.desc",
+                "limit": "1",
+            },
+            error_label="Supabase latest scan run load failed",
+        )
+        return rows[0] if rows else None
+
+    def load_scan_runs(self, limit: int = 100) -> pd.DataFrame:
+        rows = self._get(
+            self.scan_runs_table,
+            params={
+                "select": "*",
+                "order": "run_started_at.desc",
+                "limit": str(limit),
+            },
+            error_label="Supabase scan runs load failed",
+        )
+        return pd.DataFrame(rows)
+
+    def load_minervini_shortlist(self, run_id: str) -> pd.DataFrame:
+        rows = self._get(
+            self.minervini_table,
+            params={
+                "run_id": f"eq.{run_id}",
+                "select": "*",
+                "order": "relative_strength_rank.desc,symbol.asc",
+            },
+            error_label="Supabase Minervini shortlist load failed",
+        )
+        return pd.DataFrame(rows)
+
+    def load_weekly_shortlist(self, run_id: str) -> pd.DataFrame:
+        rows = self._get(
+            self.weekly_table,
+            params={
+                "run_id": f"eq.{run_id}",
+                "select": "*",
+                "order": "signal.asc,symbol.asc",
+            },
+            error_label="Supabase weekly shortlist load failed",
+        )
+        return pd.DataFrame(rows)
+
     def _post_frame(self, table: str, frame: pd.DataFrame, allowed_columns: set[str]) -> None:
         if frame.empty:
             return
@@ -238,6 +286,21 @@ class SupabaseStore:
         if response.status_code >= 400:
             message = response.text[:500] if response.text else response.reason
             raise RuntimeError(f"Supabase insert failed for {table}: HTTP {response.status_code} {message}")
+
+    def _get(self, table: str, params: dict[str, str], error_label: str) -> list[dict[str, Any]]:
+        response = requests.get(
+            f"{self.url}/rest/v1/{table}",
+            headers={
+                "apikey": self.service_role_key,
+                "Authorization": f"Bearer {self.service_role_key}",
+            },
+            params=params,
+            timeout=30,
+        )
+        if response.status_code >= 400:
+            message = response.text[:500] if response.text else response.reason
+            raise RuntimeError(f"{error_label}: HTTP {response.status_code} {message}")
+        return response.json()
 
     def _upsert(self, table: str, records: list[dict[str, Any]], conflict_column: str) -> None:
         if not records:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -43,7 +42,7 @@ def main() -> None:
     if role == "admin":
         _kite_login_panel(config, data_root)
         _scan_panel(config, storage)
-    _results_panel(storage)
+    _results_panel(config, storage)
     if role == "admin":
         _rules_panel()
 
@@ -222,18 +221,21 @@ def _kite_login_panel(config: dict[str, Any], data_root: Path) -> None:
 
 def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
     st.header("Scanner")
-    latest = storage.load_signals("latest_scan.csv")
-    latest_pass = storage.load_signals("latest_minervini_pass.csv")
-    latest_weekly = storage.load_signals("latest_weekly_buy_sell.csv")
-    latest_summary = storage.load_signals("latest_scan_summary.csv")
-    last_scan_time = _latest_file_mtime(storage.signals_dir / "latest_scan.csv")
+    bundle = _load_result_bundle(config, storage)
+    latest = bundle["all_results"]
+    latest_pass = bundle["minervini_results"]
+    latest_weekly = bundle["weekly_results"]
+    latest_summary = bundle["summary"]
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Cached stocks", len(latest) if not latest.empty else 0)
+    col1.metric("Cached stocks", _scanned_count(latest, latest_summary))
     col2.metric("Minervini", len(latest_pass) if not latest_pass.empty else 0)
     col3.metric("Weekly BUY/SELL", len(latest_weekly) if not latest_weekly.empty else 0)
-    col4.metric("Latest candle", _latest_candle_date(latest))
-    col5.metric("Last scan", last_scan_time)
+    col4.metric("Latest candle", _latest_candle_date(latest, latest_summary))
+    col5.metric("Last scan", _last_scan_time(latest_summary))
+    st.caption(f"Result source: {bundle['source']}")
+    if bundle["error"]:
+        st.warning(str(bundle["error"]))
 
     if not latest_summary.empty:
         summary = latest_summary.iloc[-1].to_dict()
@@ -288,16 +290,22 @@ def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
         st.error(str(exc))
 
 
-def _results_panel(storage: Storage) -> None:
-    all_results = storage.load_signals("latest_scan.csv")
-    st.header("Results")
+def _results_panel(config: dict[str, Any], storage: Storage) -> None:
+    bundle = _load_result_bundle(config, storage)
+    all_results = bundle["all_results"]
+    minervini_results = bundle["minervini_results"]
+    weekly_results = bundle["weekly_results"]
+    runs = bundle["runs"]
 
-    if all_results.empty:
+    st.header("Results")
+    st.caption(f"Result source: {bundle['source']}")
+    if bundle["error"]:
+        st.warning(str(bundle["error"]))
+
+    if all_results.empty and minervini_results.empty and weekly_results.empty and runs.empty:
         st.warning("No scan results yet.")
         return
 
-    minervini_results = storage.load_signals("latest_minervini_pass.csv")
-    weekly_results = storage.load_signals("latest_weekly_buy_sell.csv")
     minervini_tab, weekly_tab, diagnostics_tab, runs_tab = st.tabs(
         ["Minervini Shortlist", "Weekly BUY/SELL", "All Diagnostics", "Run History"]
     )
@@ -326,12 +334,11 @@ def _results_panel(storage: Storage) -> None:
         _show_result_table(
             all_results,
             kind="diagnostics",
-            empty_message="No diagnostics available.",
+            empty_message="No diagnostics available. Full diagnostics are stored only with local Streamlit scan output.",
             file_name="tradingbuddy_all_scan_diagnostics.csv",
         )
 
     with runs_tab:
-        runs = storage.load_signals("scan_runs.csv")
         _show_result_table(
             runs,
             kind="runs",
@@ -340,6 +347,84 @@ def _results_panel(storage: Storage) -> None:
         )
 
     _show_tradingview_overlap_list(minervini_results, weekly_results)
+
+
+def _load_result_bundle(config: dict[str, Any], storage: Storage) -> dict[str, Any]:
+    local_bundle = _load_local_result_bundle(storage)
+    supabase_bundle = _load_supabase_result_bundle(config)
+    return _choose_result_bundle(local_bundle, supabase_bundle)
+
+
+def _choose_result_bundle(local_bundle: dict[str, Any], supabase_bundle: dict[str, Any]) -> dict[str, Any]:
+    local_time = _bundle_started_at(local_bundle)
+    supabase_time = _bundle_started_at(supabase_bundle)
+    if supabase_time is not None and (local_time is None or supabase_time > local_time):
+        return supabase_bundle
+    if _bundle_has_results(local_bundle):
+        return local_bundle
+    if _bundle_has_results(supabase_bundle):
+        return supabase_bundle
+    return local_bundle if local_bundle["error"] else supabase_bundle
+
+
+def _load_local_result_bundle(storage: Storage) -> dict[str, Any]:
+    return {
+        "source": "local csv",
+        "all_results": storage.load_signals("latest_scan.csv"),
+        "minervini_results": storage.load_signals("latest_minervini_pass.csv"),
+        "weekly_results": storage.load_signals("latest_weekly_buy_sell.csv"),
+        "summary": storage.load_signals("latest_scan_summary.csv"),
+        "runs": storage.load_signals("scan_runs.csv"),
+        "error": "",
+    }
+
+
+def _load_supabase_result_bundle(config: dict[str, Any]) -> dict[str, Any]:
+    empty = {
+        "source": "supabase",
+        "all_results": pd.DataFrame(),
+        "minervini_results": pd.DataFrame(),
+        "weekly_results": pd.DataFrame(),
+        "summary": pd.DataFrame(),
+        "runs": pd.DataFrame(),
+        "error": "",
+    }
+    supabase = SupabaseStore.from_config(config)
+    if supabase is None:
+        empty["error"] = "Supabase is not configured, so only local scan CSVs can be displayed."
+        return empty
+    try:
+        latest_run = supabase.load_latest_scan_run()
+        if not latest_run:
+            return empty
+        run_id = str(latest_run.get("run_id") or "")
+        if not run_id:
+            return empty
+        empty["summary"] = pd.DataFrame([latest_run])
+        empty["minervini_results"] = supabase.load_minervini_shortlist(run_id)
+        empty["weekly_results"] = supabase.load_weekly_shortlist(run_id)
+        empty["runs"] = supabase.load_scan_runs()
+        return empty
+    except Exception as exc:
+        empty["error"] = f"Could not load Supabase results: {exc}"
+        return empty
+
+
+def _bundle_has_results(bundle: dict[str, Any]) -> bool:
+    return any(
+        not bundle[key].empty
+        for key in ("all_results", "minervini_results", "weekly_results", "summary", "runs")
+    )
+
+
+def _bundle_started_at(bundle: dict[str, Any]) -> pd.Timestamp | None:
+    summary = bundle.get("summary")
+    if not isinstance(summary, pd.DataFrame) or summary.empty or "run_started_at" not in summary.columns:
+        return None
+    parsed = pd.to_datetime(summary["run_started_at"], errors="coerce", utc=True)
+    if parsed.dropna().empty:
+        return None
+    return parsed.max()
 
 
 def _show_result_table(frame: pd.DataFrame, kind: str, empty_message: str, file_name: str) -> None:
@@ -576,19 +661,35 @@ def _clear_query_params() -> None:
         pass
 
 
-def _latest_file_mtime(path: Path) -> str:
-    if not path.exists():
-        return "-"
-    return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+def _latest_candle_date(frame: pd.DataFrame, summary: pd.DataFrame | None = None) -> str:
+    if not frame.empty and "as_of_date" in frame.columns:
+        dates = pd.to_datetime(frame["as_of_date"], errors="coerce")
+        if not dates.dropna().empty:
+            return str(dates.max().date())
+    if summary is not None and not summary.empty and "latest_candle_date" in summary.columns:
+        value = str(summary.iloc[-1].get("latest_candle_date") or "").strip()
+        if value and value.lower() != "nan":
+            return value
+    return "-"
 
 
-def _latest_candle_date(frame: pd.DataFrame) -> str:
-    if frame.empty or "as_of_date" not in frame.columns:
+def _scanned_count(all_results: pd.DataFrame, summary: pd.DataFrame) -> int:
+    if not all_results.empty:
+        return len(all_results)
+    if not summary.empty and "symbols_scanned" in summary.columns:
+        value = pd.to_numeric(pd.Series([summary.iloc[-1].get("symbols_scanned")]), errors="coerce").iloc[0]
+        if pd.notna(value):
+            return int(value)
+    return 0
+
+
+def _last_scan_time(summary: pd.DataFrame) -> str:
+    if summary.empty or "run_started_at" not in summary.columns:
         return "-"
-    dates = pd.to_datetime(frame["as_of_date"], errors="coerce")
-    if dates.dropna().empty:
+    parsed = pd.to_datetime(pd.Series([summary.iloc[-1].get("run_started_at")]), errors="coerce")
+    if parsed.dropna().empty:
         return "-"
-    return str(dates.max().date())
+    return parsed.iloc[0].strftime("%Y-%m-%d %H:%M")
 
 
 if __name__ == "__main__":

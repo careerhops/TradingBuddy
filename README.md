@@ -77,6 +77,28 @@ On every Kite refresh, the app refetches from the latest cached candle date, not
 
 Kite access tokens are short-lived. After admin login, the app saves the token for 24 hours to the ignored local runtime file `DATA_ROOT/secrets/kite_access_token.json`. If Supabase is configured, it also upserts the token into the private `tradingbuddy_kite_tokens` table with the same 24-hour expiry. Keep `DATA_ROOT` out of GitHub.
 
+## Long Scan Runs
+
+Streamlit scans run inside the active browser session. If the laptop sleeps, the browser is locked, or the Streamlit WebSocket disconnects, a long scan can stop before completion. For full-universe runs, prefer the GitHub Actions runner.
+
+One-time GitHub repo setup:
+
+1. Open GitHub repository settings.
+2. Go to **Secrets and variables > Actions**.
+3. Add repository secrets:
+   - `KITE_API_KEY`
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+
+Run a cloud scan:
+
+1. Login to Kite from the Streamlit admin screen. This saves a 24-hour Kite token in Supabase.
+2. In GitHub, open **Actions > Run TradingBuddy scan**.
+3. Click **Run workflow**.
+4. Leave `cached_only` as `false` and `max_symbols` as `0` for a full refresh.
+
+The workflow runs `python scripts/run_scan.py`, writes the scan outputs to Supabase, and does not depend on your browser session staying open. Streamlit reads the latest Supabase results when they are newer than local CSV results.
+
 ## Supabase Setup
 
 Run [supabase/schema.sql](/Users/madhubhatt/Documents/TradingBuddy/supabase/schema.sql) in the Supabase SQL editor before enabling persistence.
