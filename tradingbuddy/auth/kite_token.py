@@ -63,7 +63,7 @@ def token_status(data_root: Path) -> dict[str, Any]:
 
 def _is_expired(expires_at: object) -> bool:
     if not expires_at:
-        return False
+        return True
     try:
         parsed = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
     except ValueError:
