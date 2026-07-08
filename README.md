@@ -108,6 +108,7 @@ The app writes:
 - `tradingbuddy_scan_runs`: one row per scan run with date/time, counts, and refresh status.
 - `tradingbuddy_minervini_shortlists`: stocks passing all 8 Minervini rules.
 - `tradingbuddy_weekly_buy_sell_shortlists`: fresh weekly BUY/SELL signals from the weekly strategy.
+- `tradingbuddy_overlap_history`: cumulative history for stocks that overlap Minervini pass and weekly BUY.
 - `tradingbuddy_kite_tokens`: one private, service-role-only Kite token row with `expires_at`.
 - `tradingbuddy_app_users`: admin/viewer login records with password hashes.
 
@@ -147,7 +148,11 @@ The scanner writes:
 - `data/signals/latest_scan.csv`: all scanned NSE EQ stocks with rule diagnostics.
 - `data/signals/latest_minervini_pass.csv`: only stocks passing all 8 Minervini rules.
 - `data/signals/latest_weekly_buy_sell.csv`: fresh weekly BUY/SELL signals.
+- `data/signals/latest_overlap_history.csv`: latest overlap snapshot for stocks that pass Minervini and have a fresh weekly BUY.
+- `data/signals/overlap_history.csv`: cumulative overlap history across scan runs.
 - `data/signals/latest_scan_summary.csv`: latest run date/time and save status.
 - `data/signals/scan_runs.csv`: local run history.
 
 Shortlist tables include TradingView-friendly symbols in the `tradingview_symbol` column, for example `NSE:INFY`, plus `shortlisted_price`, `current_price`, and `gain_loss_pct`.
+
+Overlap history rows use `signal_price` as the daily close on the weekly BUY signal date and `scan_close_price` as the daily close on that scan run's latest candle date. `gain_loss_pct` is calculated from `signal_price` to `scan_close_price`, so every run tracks movement from the original signal day.

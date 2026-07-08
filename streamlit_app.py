@@ -385,6 +385,7 @@ def _results_panel(config: dict[str, Any], storage: Storage) -> None:
     all_results = bundle["all_results"]
     minervini_results = bundle["minervini_results"]
     weekly_results = bundle["weekly_results"]
+    overlap_history = bundle["overlap_history"]
     runs = bundle["runs"]
 
     st.header("Results")
@@ -392,14 +393,14 @@ def _results_panel(config: dict[str, Any], storage: Storage) -> None:
     if bundle["error"]:
         st.warning(str(bundle["error"]))
 
-    if all_results.empty and minervini_results.empty and weekly_results.empty and runs.empty:
+    if all_results.empty and minervini_results.empty and weekly_results.empty and overlap_history.empty and runs.empty:
         st.warning("No scan results yet.")
         return
 
     _show_tradingview_overlap_list(minervini_results, weekly_results)
 
-    minervini_tab, weekly_tab, diagnostics_tab, runs_tab = st.tabs(
-        ["Minervini Shortlist", "Weekly BUY/SELL", "All Diagnostics", "Run History"]
+    minervini_tab, weekly_tab, overlap_history_tab, diagnostics_tab, runs_tab = st.tabs(
+        ["Minervini Shortlist", "Weekly BUY/SELL", "Overlap History", "All Diagnostics", "Run History"]
     )
 
     with minervini_tab:
@@ -420,6 +421,14 @@ def _results_panel(config: dict[str, Any], storage: Storage) -> None:
             kind="weekly",
             empty_message="No fresh weekly BUY/SELL signals in the latest run.",
             file_name="tradingbuddy_weekly_buy_sell_shortlist.csv",
+        )
+
+    with overlap_history_tab:
+        _show_result_table(
+            overlap_history,
+            kind="overlap_history",
+            empty_message="No overlap history has been recorded yet.",
+            file_name="tradingbuddy_overlap_history.csv",
         )
 
     with diagnostics_tab:
@@ -463,6 +472,7 @@ def _load_local_result_bundle(storage: Storage) -> dict[str, Any]:
         "all_results": storage.load_signals("latest_scan.csv"),
         "minervini_results": storage.load_signals("latest_minervini_pass.csv"),
         "weekly_results": storage.load_signals("latest_weekly_buy_sell.csv"),
+        "overlap_history": storage.load_signals("overlap_history.csv"),
         "summary": storage.load_signals("latest_scan_summary.csv"),
         "runs": storage.load_signals("scan_runs.csv"),
         "error": "",
@@ -475,6 +485,7 @@ def _load_supabase_result_bundle(config: dict[str, Any]) -> dict[str, Any]:
         "all_results": pd.DataFrame(),
         "minervini_results": pd.DataFrame(),
         "weekly_results": pd.DataFrame(),
+        "overlap_history": pd.DataFrame(),
         "summary": pd.DataFrame(),
         "runs": pd.DataFrame(),
         "error": "",
@@ -493,6 +504,7 @@ def _load_supabase_result_bundle(config: dict[str, Any]) -> dict[str, Any]:
         empty["summary"] = pd.DataFrame([latest_run])
         empty["minervini_results"] = supabase.load_minervini_shortlist(run_id)
         empty["weekly_results"] = supabase.load_weekly_shortlist(run_id)
+        empty["overlap_history"] = supabase.load_overlap_history()
         empty["runs"] = supabase.load_scan_runs()
         return empty
     except Exception as exc:
@@ -503,7 +515,7 @@ def _load_supabase_result_bundle(config: dict[str, Any]) -> dict[str, Any]:
 def _bundle_has_results(bundle: dict[str, Any]) -> bool:
     return any(
         not bundle[key].empty
-        for key in ("all_results", "minervini_results", "weekly_results", "summary", "runs")
+        for key in ("all_results", "minervini_results", "weekly_results", "overlap_history", "summary", "runs")
     )
 
 
@@ -625,6 +637,24 @@ def _display_frame(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
             "passes_minervini",
             "minervini_pass_count",
         ]
+    elif kind == "overlap_history":
+        columns = [
+            "run_started_at",
+            "scan_date",
+            "tradingview_symbol",
+            "name",
+            "signal_date",
+            "signal_price",
+            "scan_close_date",
+            "scan_close_price",
+            "gain_loss_pct",
+            "price_source",
+            "relative_strength_rank",
+            "minervini_pass_count",
+            "weekly_volume_confirmation",
+            "weekly_trend_confirmation",
+            "run_id",
+        ]
     elif kind == "runs":
         columns = [
             "run_started_at",
@@ -636,6 +666,7 @@ def _display_frame(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
             "symbols_failed",
             "minervini_pass_count",
             "weekly_buy_sell_count",
+            "overlap_count",
             "latest_candle_date",
             "ltp_status",
             "supabase_status",

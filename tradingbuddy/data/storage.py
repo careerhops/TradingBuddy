@@ -117,15 +117,22 @@ class Storage:
             return pd.DataFrame()
 
     def append_scan_run(self, summary: dict[str, object]) -> Path:
-        path = self.signals_dir / "scan_runs.csv"
         row = pd.DataFrame([summary])
+        return self.append_signals("scan_runs.csv", row)
+
+    def append_signals(self, name: str, rows: pd.DataFrame) -> Path:
+        path = self.signals_dir / name
+        if rows.empty:
+            if not path.exists():
+                rows.to_csv(path, index=False)
+            return path
         if path.exists():
             try:
                 existing = pd.read_csv(path)
             except pd.errors.EmptyDataError:
                 existing = pd.DataFrame()
-            frame = pd.concat([existing, row], ignore_index=True)
+            frame = pd.concat([existing, rows], ignore_index=True)
         else:
-            frame = row
+            frame = rows
         frame.to_csv(path, index=False)
         return path

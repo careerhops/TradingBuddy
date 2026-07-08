@@ -21,6 +21,7 @@ SCAN_RUN_COLUMNS = {
     "symbols_failed",
     "minervini_pass_count",
     "weekly_buy_sell_count",
+    "overlap_count",
     "latest_candle_date",
 }
 
@@ -50,6 +51,26 @@ MINERVINI_COLUMNS = {
     "rule_8_relative_strength_rank_70",
     "latest_weekly_signal",
     "latest_weekly_signal_date",
+}
+
+OVERLAP_HISTORY_COLUMNS = {
+    "run_id",
+    "run_started_at",
+    "scan_date",
+    "scan_close_date",
+    "exchange",
+    "symbol",
+    "tradingview_symbol",
+    "name",
+    "signal_date",
+    "signal_price",
+    "scan_close_price",
+    "gain_loss_pct",
+    "price_source",
+    "minervini_pass_count",
+    "relative_strength_rank",
+    "weekly_volume_confirmation",
+    "weekly_trend_confirmation",
 }
 
 APP_USER_COLUMNS = {
@@ -93,6 +114,7 @@ class SupabaseStore:
         scan_runs_table: str,
         minervini_table: str,
         weekly_table: str,
+        overlap_history_table: str,
         kite_tokens_table: str,
         app_users_table: str,
     ) -> None:
@@ -101,6 +123,7 @@ class SupabaseStore:
         self.scan_runs_table = scan_runs_table
         self.minervini_table = minervini_table
         self.weekly_table = weekly_table
+        self.overlap_history_table = overlap_history_table
         self.kite_tokens_table = kite_tokens_table
         self.app_users_table = app_users_table
 
@@ -121,6 +144,7 @@ class SupabaseStore:
             scan_runs_table=str(cfg.get("scan_runs_table", "tradingbuddy_scan_runs")),
             minervini_table=str(cfg.get("minervini_table", "tradingbuddy_minervini_shortlists")),
             weekly_table=str(cfg.get("weekly_table", "tradingbuddy_weekly_buy_sell_shortlists")),
+            overlap_history_table=str(cfg.get("overlap_history_table", "tradingbuddy_overlap_history")),
             kite_tokens_table=str(cfg.get("kite_tokens_table", "tradingbuddy_kite_tokens")),
             app_users_table=str(cfg.get("app_users_table", "tradingbuddy_app_users")),
         )
@@ -133,6 +157,9 @@ class SupabaseStore:
 
     def save_weekly_shortlist(self, frame: pd.DataFrame) -> None:
         self._post_frame(self.weekly_table, frame, WEEKLY_COLUMNS)
+
+    def save_overlap_history(self, frame: pd.DataFrame) -> None:
+        self._post_frame(self.overlap_history_table, frame, OVERLAP_HISTORY_COLUMNS)
 
     def save_kite_token(
         self,
@@ -259,6 +286,18 @@ class SupabaseStore:
                 "order": "signal.asc,symbol.asc",
             },
             error_label="Supabase weekly shortlist load failed",
+        )
+        return pd.DataFrame(rows)
+
+    def load_overlap_history(self, limit: int = 500) -> pd.DataFrame:
+        rows = self._get(
+            self.overlap_history_table,
+            params={
+                "select": "*",
+                "order": "scan_date.desc,symbol.asc",
+                "limit": str(limit),
+            },
+            error_label="Supabase overlap history load failed",
         )
         return pd.DataFrame(rows)
 

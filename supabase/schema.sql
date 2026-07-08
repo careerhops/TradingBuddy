@@ -10,9 +10,13 @@ create table if not exists public.tradingbuddy_scan_runs (
   symbols_failed integer not null default 0,
   minervini_pass_count integer not null default 0,
   weekly_buy_sell_count integer not null default 0,
+  overlap_count integer not null default 0,
   latest_candle_date date,
   created_at timestamptz not null default now()
 );
+
+alter table public.tradingbuddy_scan_runs
+  add column if not exists overlap_count integer not null default 0;
 
 create table if not exists public.tradingbuddy_minervini_shortlists (
   id bigserial primary key,
@@ -81,6 +85,37 @@ create index if not exists tradingbuddy_weekly_run_idx
 
 create index if not exists tradingbuddy_weekly_symbol_idx
   on public.tradingbuddy_weekly_buy_sell_shortlists(symbol, shortlist_date desc);
+
+create table if not exists public.tradingbuddy_overlap_history (
+  id bigserial primary key,
+  run_id text not null references public.tradingbuddy_scan_runs(run_id) on delete cascade,
+  run_started_at timestamptz not null,
+  scan_date date not null,
+  scan_close_date date,
+  exchange text not null,
+  symbol text not null,
+  tradingview_symbol text not null,
+  name text,
+  signal_date date not null,
+  signal_price numeric,
+  scan_close_price numeric,
+  gain_loss_pct numeric,
+  price_source text not null default 'daily_close',
+  minervini_pass_count integer,
+  relative_strength_rank numeric,
+  weekly_volume_confirmation boolean,
+  weekly_trend_confirmation boolean,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists tradingbuddy_overlap_history_run_idx
+  on public.tradingbuddy_overlap_history(run_id);
+
+create index if not exists tradingbuddy_overlap_history_symbol_idx
+  on public.tradingbuddy_overlap_history(symbol, scan_date desc);
+
+create index if not exists tradingbuddy_overlap_history_signal_idx
+  on public.tradingbuddy_overlap_history(symbol, signal_date desc, scan_date desc);
 
 create table if not exists public.tradingbuddy_kite_tokens (
   token_name text primary key,

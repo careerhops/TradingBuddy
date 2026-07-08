@@ -13,6 +13,7 @@ def _bundle(source: str, started_at: str) -> dict[str, object]:
         "all_results": pd.DataFrame(),
         "minervini_results": pd.DataFrame(),
         "weekly_results": pd.DataFrame(),
+        "overlap_history": pd.DataFrame(),
         "summary": pd.DataFrame([{"run_started_at": started_at, "run_id": source}]),
         "runs": pd.DataFrame(),
         "error": "",

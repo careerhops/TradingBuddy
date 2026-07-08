@@ -22,6 +22,26 @@ from tradingbuddy.universe import build_universe
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
+OVERLAP_HISTORY_COLUMNS = [
+    "run_id",
+    "run_started_at",
+    "scan_date",
+    "scan_close_date",
+    "exchange",
+    "symbol",
+    "tradingview_symbol",
+    "name",
+    "signal_date",
+    "signal_price",
+    "scan_close_price",
+    "gain_loss_pct",
+    "price_source",
+    "minervini_pass_count",
+    "relative_strength_rank",
+    "weekly_volume_confirmation",
+    "weekly_trend_confirmation",
+]
+
 
 @dataclass(frozen=True)
 class ScanResult:
@@ -29,6 +49,7 @@ class ScanResult:
     all_results: pd.DataFrame
     passed_results: pd.DataFrame
     weekly_results: pd.DataFrame
+    overlap_history: pd.DataFrame
 
 
 def run_scan(
@@ -155,6 +176,7 @@ def run_scan(
         ).reset_index(drop=True)
     passed_results = _build_minervini_shortlist(all_results)
     weekly_results = _build_weekly_shortlist(all_results)
+    overlap_history = _build_overlap_history(all_results)
 
     ltp_status = "not_requested"
     if provider is not None:
@@ -163,6 +185,8 @@ def run_scan(
     all_path = storage.save_signals("latest_scan.csv", all_results)
     pass_path = storage.save_signals("latest_minervini_pass.csv", passed_results)
     weekly_path = storage.save_signals("latest_weekly_buy_sell.csv", weekly_results)
+    overlap_path = storage.save_signals("latest_overlap_history.csv", overlap_history)
+    storage.append_signals("overlap_history.csv", overlap_history)
     latest_date = (
         str(pd.to_datetime(all_results["as_of_date"], errors="coerce").max().date())
         if not all_results.empty and pd.to_datetime(all_results["as_of_date"], errors="coerce").notna().any()
@@ -180,12 +204,14 @@ def run_scan(
         "symbols_failed": int(failed_symbols),
         "minervini_pass_count": int(len(passed_results)),
         "weekly_buy_sell_count": int(len(weekly_results)),
+        "overlap_count": int(len(overlap_history)),
         "latest_candle_date": latest_date,
         "refresh_mode": "kite_refresh" if refresh_data else "cached_only",
         "ltp_status": ltp_status,
         "all_results_path": str(all_path),
         "passed_results_path": str(pass_path),
         "weekly_results_path": str(weekly_path),
+        "overlap_history_path": str(overlap_path),
         "supabase_status": "not_configured",
     }
     supabase = SupabaseStore.from_config(config)
@@ -194,6 +220,7 @@ def run_scan(
             supabase.save_scan_run(summary)
             supabase.save_minervini_shortlist(passed_results)
             supabase.save_weekly_shortlist(weekly_results)
+            supabase.save_overlap_history(overlap_history)
             summary["supabase_status"] = "saved"
         except Exception as exc:
             summary["supabase_status"] = f"failed: {exc}"
@@ -202,7 +229,13 @@ def run_scan(
     storage.append_scan_run(summary)
 
     _emit(progress_callback, phase="Complete", completed=len(universe), total=len(universe), summary=summary)
-    return ScanResult(summary=summary, all_results=all_results, passed_results=passed_results, weekly_results=weekly_results)
+    return ScanResult(
+        summary=summary,
+        all_results=all_results,
+        passed_results=passed_results,
+        weekly_results=weekly_results,
+        overlap_history=overlap_history,
+    )
 
 
 def latest_weekly_signal(daily: pd.DataFrame, config: dict[str, Any]) -> dict[str, Any]:
@@ -360,6 +393,34 @@ def _build_weekly_shortlist(all_results: pd.DataFrame) -> pd.DataFrame:
     frame["shortlisted_price"] = frame["signal_price"]
     frame = _add_gain_loss(frame, "signal_price")
     return frame.reset_index(drop=True)
+
+
+def _build_overlap_history(all_results: pd.DataFrame) -> pd.DataFrame:
+    if all_results.empty:
+        return pd.DataFrame(columns=OVERLAP_HISTORY_COLUMNS)
+    required_columns = {"passes_minervini", "fresh_weekly_buy", "latest_weekly_signal"}
+    if not required_columns.issubset(set(all_results.columns)):
+        return pd.DataFrame(columns=OVERLAP_HISTORY_COLUMNS)
+
+    frame = all_results[
+        all_results["passes_minervini"].fillna(False).astype(bool)
+        & all_results["fresh_weekly_buy"].fillna(False).astype(bool)
+        & (all_results["latest_weekly_signal"].astype(str).str.upper() == "BUY")
+    ].copy()
+    if frame.empty:
+        return pd.DataFrame(columns=OVERLAP_HISTORY_COLUMNS)
+
+    frame["scan_date"] = pd.to_datetime(frame["as_of_date"], errors="coerce").dt.date.astype("string")
+    frame["scan_close_date"] = frame["scan_date"]
+    frame["signal_date"] = pd.to_datetime(frame["latest_weekly_signal_date"], errors="coerce").dt.date.astype("string")
+    frame["signal_price"] = pd.to_numeric(frame["latest_weekly_signal_close"], errors="coerce")
+    frame["scan_close_price"] = pd.to_numeric(frame["close"], errors="coerce")
+    frame["current_price"] = frame["scan_close_price"]
+    frame["price_source"] = "daily_close"
+    frame = _add_gain_loss(frame, "signal_price")
+
+    available = [column for column in OVERLAP_HISTORY_COLUMNS if column in frame.columns]
+    return frame[available].reset_index(drop=True)
 
 
 def _apply_kite_ltp(provider: KiteDataProvider, *frames: pd.DataFrame) -> str:

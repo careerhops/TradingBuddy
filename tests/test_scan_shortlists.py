@@ -4,7 +4,13 @@ import unittest
 
 import pandas as pd
 
-from tradingbuddy.scan import _build_minervini_shortlist, _build_weekly_shortlist, _daily_close_on_date, _fetch_start_date
+from tradingbuddy.scan import (
+    _build_minervini_shortlist,
+    _build_overlap_history,
+    _build_weekly_shortlist,
+    _daily_close_on_date,
+    _fetch_start_date,
+)
 
 
 class ScanShortlistTests(unittest.TestCase):
@@ -28,6 +34,7 @@ class ScanShortlistTests(unittest.TestCase):
                     "latest_weekly_signal_date": pd.Timestamp("2026-07-06"),
                     "latest_weekly_signal_close": 95.0,
                     "fresh_weekly_signal": True,
+                    "fresh_weekly_buy": True,
                     "bars_since_weekly_signal": 0,
                 },
                 {
@@ -47,6 +54,7 @@ class ScanShortlistTests(unittest.TestCase):
                     "latest_weekly_signal_date": pd.NaT,
                     "latest_weekly_signal_close": pd.NA,
                     "fresh_weekly_signal": False,
+                    "fresh_weekly_buy": False,
                     "bars_since_weekly_signal": pd.NA,
                 },
             ]
@@ -60,6 +68,12 @@ class ScanShortlistTests(unittest.TestCase):
         self.assertEqual(weekly["symbol"].tolist(), ["ABC"])
         self.assertEqual(weekly.iloc[0]["signal"], "BUY")
         self.assertAlmostEqual(float(weekly.iloc[0]["gain_loss_pct"]), 15.7894736842)
+
+        overlap = _build_overlap_history(rows)
+        self.assertEqual(overlap["symbol"].tolist(), ["ABC"])
+        self.assertEqual(float(overlap.iloc[0]["signal_price"]), 95.0)
+        self.assertEqual(float(overlap.iloc[0]["scan_close_price"]), 100.0)
+        self.assertAlmostEqual(float(overlap.iloc[0]["gain_loss_pct"]), 5.2631578947)
 
     def test_fetch_start_date_refetches_latest_cached_date_for_overwrite(self) -> None:
         existing = pd.DataFrame({"date": [pd.Timestamp("2026-07-06"), pd.Timestamp("2026-07-07")]})
