@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import os
+import secrets as secrets_lib
+import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import pandas as pd
 import streamlit as st
@@ -16,6 +21,9 @@ from tradingbuddy.data.storage import Storage
 from tradingbuddy.data.supabase_store import SupabaseStore
 from tradingbuddy.minervini import RULE_COLUMNS, RULE_LABELS
 from tradingbuddy.scan import run_scan
+
+
+KITE_LOGIN_STATE_TTL_SECONDS = 20 * 60
 
 
 st.set_page_config(
@@ -34,6 +42,7 @@ def main() -> None:
     st.title("TradingBuddy")
     st.caption("NSE EQ Minervini screener with Kite data and weekly BUY/SELL signals")
 
+    _handle_kite_callback(config, data_root)
     role = _auth_gate(config)
     if role is None:
         st.info("Sign in to view TradingBuddy results.")
@@ -157,9 +166,90 @@ def _authenticate_app_user(
     return None
 
 
+def _handle_kite_callback(config: dict[str, Any], data_root: Path) -> None:
+    request_token = _query_param("request_token")
+    if not request_token:
+        return
+
+    login_state = _query_param("tb_state")
+    if not login_state:
+        return
+
+    secret = _kite_login_state_secret()
+    if not _is_valid_kite_login_state(login_state, secret):
+        st.sidebar.error("Kite callback expired or invalid. Start Kite login again from the admin screen.")
+        return
+
+    try:
+        result = _save_kite_session(request_token, data_root, config)
+    except Exception as exc:
+        st.sidebar.error(f"Kite token save failed: {exc}")
+        return
+
+    st.session_state["auth_role"] = "admin"
+    st.session_state["auth_user_id"] = "kite-callback"
+    st.session_state["kite_token_saved_message"] = result
+    _clear_query_params()
+    st.rerun()
+
+
+def _kite_login_url(api_key: str) -> str:
+    login_url = KiteConnect(api_key=api_key).login_url()
+    secret = _kite_login_state_secret()
+    if not secret:
+        return login_url
+
+    redirect_params = urlencode({"tb_state": _create_kite_login_state(secret)})
+    separator = "&" if "?" in login_url else "?"
+    return f"{login_url}{separator}{urlencode({'redirect_params': redirect_params})}"
+
+
+def _kite_login_state_secret() -> str:
+    return os.getenv("KITE_API_SECRET", "").strip()
+
+
+def _create_kite_login_state(secret: str, issued_at: int | None = None, nonce: str | None = None) -> str:
+    if not secret.strip():
+        return ""
+    issued = int(issued_at if issued_at is not None else time.time())
+    random_nonce = nonce or secrets_lib.token_urlsafe(16)
+    payload = f"{issued}.{random_nonce}"
+    return f"{payload}.{_kite_state_signature(payload, secret)}"
+
+
+def _is_valid_kite_login_state(state: str, secret: str, now: int | None = None) -> bool:
+    if not state or not secret.strip():
+        return False
+    try:
+        issued_text, nonce, signature = state.split(".", 2)
+        issued = int(issued_text)
+    except ValueError:
+        return False
+    if not nonce or not signature:
+        return False
+
+    current = int(now if now is not None else time.time())
+    if issued > current + 60:
+        return False
+    if current - issued > KITE_LOGIN_STATE_TTL_SECONDS:
+        return False
+
+    payload = f"{issued}.{nonce}"
+    expected = _kite_state_signature(payload, secret)
+    return hmac.compare_digest(signature, expected)
+
+
+def _kite_state_signature(payload: str, secret: str) -> str:
+    digest = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
 def _kite_login_panel(config: dict[str, Any], data_root: Path) -> None:
     with st.sidebar:
         st.subheader("Kite")
+        saved_message = st.session_state.pop("kite_token_saved_message", "")
+        if saved_message:
+            st.success(saved_message)
         status = _kite_token_status(data_root, config)
         if status["exists"]:
             profile = status.get("profile", {}) or {}
@@ -198,7 +288,7 @@ def _kite_login_panel(config: dict[str, Any], data_root: Path) -> None:
         st.code(redirect_url, language=None)
         st.caption("For local testing, configure the Kite app redirect URL as the local Streamlit URL. For Streamlit Cloud, use the deployed app URL.")
         if api_key:
-            login_url = KiteConnect(api_key=api_key).login_url()
+            login_url = _kite_login_url(api_key)
             st.link_button("Login with Kite", login_url)
         else:
             st.error("KITE_API_KEY is missing.")
@@ -306,6 +396,8 @@ def _results_panel(config: dict[str, Any], storage: Storage) -> None:
         st.warning("No scan results yet.")
         return
 
+    _show_tradingview_overlap_list(minervini_results, weekly_results)
+
     minervini_tab, weekly_tab, diagnostics_tab, runs_tab = st.tabs(
         ["Minervini Shortlist", "Weekly BUY/SELL", "All Diagnostics", "Run History"]
     )
@@ -345,8 +437,6 @@ def _results_panel(config: dict[str, Any], storage: Storage) -> None:
             empty_message="No run history yet.",
             file_name="tradingbuddy_scan_runs.csv",
         )
-
-    _show_tradingview_overlap_list(minervini_results, weekly_results)
 
 
 def _load_result_bundle(config: dict[str, Any], storage: Storage) -> dict[str, Any]:
