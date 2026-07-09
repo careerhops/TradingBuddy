@@ -10,6 +10,7 @@ from tradingbuddy.scan import (
     _build_weekly_shortlist,
     _daily_close_on_date,
     _fetch_start_date,
+    _validate_refresh_quality,
 )
 
 
@@ -93,6 +94,24 @@ class ScanShortlistTests(unittest.TestCase):
         signal_close = _daily_close_on_date(daily, pd.Timestamp("2026-07-06"))
 
         self.assertEqual(signal_close, 624.55)
+
+    def test_fresh_refresh_rejects_zero_returned_candle_rows(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "did not return candle rows"):
+            _validate_refresh_quality(
+                universe_size=100,
+                updated_symbols=0,
+                failed_symbols=0,
+                failure_examples=[],
+            )
+
+    def test_fresh_refresh_rejects_high_failure_rate(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "failed for 30/100 symbols"):
+            _validate_refresh_quality(
+                universe_size=100,
+                updated_symbols=70,
+                failed_symbols=30,
+                failure_examples=["ABC: rate limited"],
+            )
 
 
 if __name__ == "__main__":

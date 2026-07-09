@@ -378,7 +378,10 @@ def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
             "Scan complete: "
             f"{result.summary['minervini_pass_count']} passed / "
             f"{result.summary['weekly_buy_sell_count']} weekly signals / "
-            f"{result.summary['symbols_scanned']} scanned."
+            f"{result.summary['symbols_scanned']} scanned / "
+            f"{result.summary['symbols_updated']} updated / "
+            f"{result.summary['symbols_failed']} failed / "
+            f"latest candle {result.summary.get('latest_candle_date') or '-'}."
         )
         st.rerun()
     except Exception as exc:

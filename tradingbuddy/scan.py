@@ -92,6 +92,7 @@ def run_scan(
     rows: list[dict[str, Any]] = []
     updated_symbols = 0
     failed_symbols = 0
+    failure_examples: list[str] = []
 
     _emit(progress_callback, phase="Universe ready", completed=0, total=len(universe))
     for completed, (_, instrument) in enumerate(universe.iterrows(), start=1):
@@ -135,6 +136,8 @@ def run_scan(
                 failed_symbols += 1
                 fetch_status = "failed"
                 fetch_error = str(exc)
+                if len(failure_examples) < 5:
+                    failure_examples.append(f"{symbol}: {fetch_error[:180]}")
                 daily = existing
         else:
             daily = existing
@@ -164,6 +167,14 @@ def run_scan(
             completed=completed,
             total=len(universe),
             current_symbol=symbol,
+        )
+
+    if refresh_data:
+        _validate_refresh_quality(
+            universe_size=len(universe),
+            updated_symbols=updated_symbols,
+            failed_symbols=failed_symbols,
+            failure_examples=failure_examples,
         )
 
     all_results = score_minervini_universe(rows, config)
@@ -424,6 +435,32 @@ def _build_overlap_history(all_results: pd.DataFrame) -> pd.DataFrame:
 
     available = [column for column in OVERLAP_HISTORY_COLUMNS if column in frame.columns]
     return frame[available].reset_index(drop=True)
+
+
+def _validate_refresh_quality(
+    universe_size: int,
+    updated_symbols: int,
+    failed_symbols: int,
+    failure_examples: list[str] | None = None,
+) -> None:
+    if universe_size <= 0:
+        return
+
+    examples = "; ".join(failure_examples or [])
+    suffix = f" Sample errors: {examples}" if examples else ""
+    if updated_symbols == 0:
+        raise RuntimeError(
+            "Kite refresh did not return candle rows for any symbol, so cached results were not saved as a fresh scan."
+            + suffix
+        )
+
+    failure_rate = failed_symbols / universe_size
+    if failure_rate >= 0.25:
+        raise RuntimeError(
+            f"Kite refresh failed for {failed_symbols}/{universe_size} symbols ({failure_rate:.0%}), "
+            "so cached results were not saved as a fresh scan."
+            + suffix
+        )
 
 
 def _apply_kite_ltp(provider: KiteDataProvider, *frames: pd.DataFrame) -> str:
