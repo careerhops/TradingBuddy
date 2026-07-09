@@ -332,13 +332,20 @@ def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
         st.caption(
             f"Run: {summary.get('run_id', '-')} | "
             f"Started: {summary.get('run_started_at', '-')} | "
+            f"Mode: {summary.get('refresh_mode', '-')} | "
             f"Supabase: {summary.get('supabase_status', '-')}"
         )
 
     with st.form("run_scan"):
-        refresh_data = st.checkbox("Refresh Kite data", value=latest.empty)
+        scan_mode = st.radio(
+            "Scan mode",
+            ["Fresh Kite refresh", "Use cached candles"],
+            index=0,
+            horizontal=True,
+            help="Fresh Kite refresh fetches the latest Kite candles before applying Minervini and weekly BUY/SELL rules.",
+        )
         limit_symbols = st.number_input("Symbol limit (0 means all)", min_value=0, max_value=10000, value=0, step=50)
-        submitted = st.form_submit_button("Run scan", type="primary")
+        submitted = st.form_submit_button("Run fresh scan" if scan_mode == "Fresh Kite refresh" else "Run cached scan", type="primary")
 
     if not submitted:
         return
@@ -362,7 +369,7 @@ def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
         result = run_scan(
             config,
             storage,
-            refresh_data=refresh_data,
+            refresh_data=scan_mode == "Fresh Kite refresh",
             max_symbols=int(limit_symbols) if int(limit_symbols) > 0 else None,
             progress_callback=progress,
         )
@@ -386,10 +393,19 @@ def _results_panel(config: dict[str, Any], storage: Storage) -> None:
     minervini_results = bundle["minervini_results"]
     weekly_results = bundle["weekly_results"]
     overlap_history = bundle["overlap_history"]
+    latest_summary = bundle["summary"]
     runs = bundle["runs"]
 
     st.header("Results")
     st.caption(f"Result source: {bundle['source']}")
+    if not latest_summary.empty:
+        summary = latest_summary.iloc[-1].to_dict()
+        st.caption(
+            f"Displayed run: {summary.get('run_id', '-')} | "
+            f"Scan date: {summary.get('scan_date', '-')} | "
+            f"Started: {summary.get('run_started_at', '-')} | "
+            f"Mode: {summary.get('refresh_mode', '-')}"
+        )
     if bundle["error"]:
         st.warning(str(bundle["error"]))
 
