@@ -6,6 +6,7 @@ import hmac
 import os
 import secrets as secrets_lib
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -335,6 +336,7 @@ def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
             f"Mode: {summary.get('refresh_mode', '-')} | "
             f"Supabase: {summary.get('supabase_status', '-')}"
         )
+        _show_freshness_messages(config, latest_summary)
 
     with st.form("run_scan"):
         scan_mode = st.radio(
@@ -409,6 +411,7 @@ def _results_panel(config: dict[str, Any], storage: Storage) -> None:
             f"Started: {summary.get('run_started_at', '-')} | "
             f"Mode: {summary.get('refresh_mode', '-')}"
         )
+        _show_freshness_messages(config, latest_summary)
     if bundle["error"]:
         st.warning(str(bundle["error"]))
 
@@ -540,6 +543,58 @@ def _load_supabase_result_bundle(config: dict[str, Any]) -> dict[str, Any]:
 def _is_missing_overlap_history_table_error(exc: Exception) -> bool:
     message = str(exc)
     return "tradingbuddy_overlap_history" in message and ("PGRST205" in message or "HTTP 404" in message)
+
+
+def _show_freshness_messages(config: dict[str, Any], summary: pd.DataFrame) -> None:
+    for level, message in _freshness_messages(config, summary):
+        if level == "warning":
+            st.warning(message)
+        else:
+            st.info(message)
+
+
+def _freshness_messages(
+    config: dict[str, Any],
+    summary: pd.DataFrame,
+    today: pd.Timestamp | None = None,
+) -> list[tuple[str, str]]:
+    if summary.empty:
+        return []
+
+    row = summary.iloc[-1]
+    scan_date = pd.to_datetime(row.get("scan_date"), errors="coerce")
+    latest_candle_date = pd.to_datetime(row.get("latest_candle_date"), errors="coerce")
+    current_day = pd.Timestamp(today).date() if today is not None else _app_today(config)
+    messages: list[tuple[str, str]] = []
+
+    if pd.notna(scan_date):
+        scan_day = pd.Timestamp(scan_date).date()
+        if scan_day < current_day:
+            messages.append(
+                (
+                    "warning",
+                    f"Latest completed scan is {scan_day}, not {current_day}. No completed scan has been saved for {current_day}.",
+                )
+            )
+        elif pd.notna(latest_candle_date):
+            candle_day = pd.Timestamp(latest_candle_date).date()
+            if candle_day < scan_day:
+                messages.append(
+                    (
+                        "info",
+                        f"Scan ran on {scan_day}, but the latest daily candle is {candle_day}. Daily close data can lag until the trading day has a candle.",
+                    )
+                )
+
+    return messages
+
+
+def _app_today(config: dict[str, Any]) -> date:
+    timezone_name = str(config.get("app", {}).get("timezone", "Asia/Kolkata"))
+    try:
+        return pd.Timestamp.now(tz=timezone_name).date()
+    except Exception:
+        return pd.Timestamp.now(tz="Asia/Kolkata").date()
 
 
 def _bundle_has_results(bundle: dict[str, Any]) -> bool:
