@@ -56,4 +56,4 @@ jobs:
           if [ "${{ inputs.max_symbols }}" != "0" ]; then
             args+=("--max-symbols" "${{ inputs.max_symbols }}")
           fi
-          python scripts/run_scan.py "${args[@]}"
+          python scripts/run_scan.py "${args[@]}" --require-supabase

@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import pandas as pd
+import requests
 import streamlit as st
 from kiteconnect import KiteConnect
 
@@ -74,6 +75,10 @@ def _copy_streamlit_secrets_to_env() -> None:
         "KITE_REDIRECT_URL",
         "SUPABASE_URL",
         "SUPABASE_SERVICE_ROLE_KEY",
+        "GITHUB_ACTIONS_TOKEN",
+        "GITHUB_REPOSITORY",
+        "GITHUB_WORKFLOW_ID",
+        "GITHUB_BRANCH",
     ):
         try:
             value = secrets.get(key)
@@ -338,6 +343,53 @@ def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
         )
         _show_freshness_messages(config, latest_summary)
 
+    _github_scan_panel()
+
+    with st.expander("Run scan in this Streamlit session", expanded=not _github_scan_configured()):
+        _streamlit_session_scan_form(config, storage)
+
+
+def _github_scan_panel() -> None:
+    st.subheader("Durable Cloud Scan")
+    if not _github_scan_configured():
+        st.info(
+            "Configure GITHUB_ACTIONS_TOKEN in Streamlit secrets to run scans through GitHub Actions. "
+            "This is the recommended path for full NSE scans."
+        )
+        return
+
+    with st.form("github_scan"):
+        scan_mode = st.radio(
+            "Cloud scan mode",
+            ["Fresh Kite refresh", "Use cached candles"],
+            index=0,
+            horizontal=True,
+            help="Runs outside Streamlit using GitHub Actions and writes results to Supabase when complete.",
+        )
+        limit_symbols = st.number_input("Cloud symbol limit (0 means all)", min_value=0, max_value=10000, value=0, step=50)
+        submitted = st.form_submit_button(
+            "Start durable fresh scan" if scan_mode == "Fresh Kite refresh" else "Start durable cached scan",
+            type="primary",
+        )
+
+    if not submitted:
+        return
+
+    try:
+        workflow_url = _dispatch_github_scan(
+            cached_only=scan_mode == "Use cached candles",
+            max_symbols=int(limit_symbols),
+        )
+    except Exception as exc:
+        st.error(str(exc))
+        return
+
+    st.success("GitHub Actions scan started. Refresh Results after the workflow completes.")
+    st.link_button("View Workflow Runs", workflow_url)
+
+
+def _streamlit_session_scan_form(config: dict[str, Any], storage: Storage) -> None:
+    st.warning("Full scans in Streamlit can stop if the browser disconnects. Prefer Durable Cloud Scan for full NSE runs.")
     with st.form("run_scan"):
         scan_mode = st.radio(
             "Scan mode",
@@ -390,6 +442,69 @@ def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
         progress_bar.empty()
         progress_text.empty()
         st.error(str(exc))
+
+
+def _github_scan_configured() -> bool:
+    return bool(os.getenv("GITHUB_ACTIONS_TOKEN", "").strip())
+
+
+def _github_scan_settings() -> dict[str, str]:
+    return {
+        "token": os.getenv("GITHUB_ACTIONS_TOKEN", "").strip(),
+        "repo": os.getenv("GITHUB_REPOSITORY", "careerhops/TradingBuddy").strip(),
+        "workflow_id": os.getenv("GITHUB_WORKFLOW_ID", "run-scan.yml").strip(),
+        "branch": os.getenv("GITHUB_BRANCH", "main").strip(),
+    }
+
+
+def _github_workflow_dispatch_request(
+    *,
+    repo: str,
+    workflow_id: str,
+    branch: str,
+    cached_only: bool,
+    max_symbols: int,
+) -> tuple[str, dict[str, Any], str]:
+    safe_max_symbols = max(int(max_symbols), 0)
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
+    payload = {
+        "ref": branch,
+        "inputs": {
+            "cached_only": "true" if cached_only else "false",
+            "max_symbols": str(safe_max_symbols),
+        },
+    }
+    workflow_url = f"https://github.com/{repo}/actions/workflows/{workflow_id}"
+    return url, payload, workflow_url
+
+
+def _dispatch_github_scan(*, cached_only: bool, max_symbols: int) -> str:
+    settings = _github_scan_settings()
+    token = settings["token"]
+    if not token:
+        raise RuntimeError("GITHUB_ACTIONS_TOKEN is missing from Streamlit secrets.")
+
+    url, payload, workflow_url = _github_workflow_dispatch_request(
+        repo=settings["repo"],
+        workflow_id=settings["workflow_id"],
+        branch=settings["branch"],
+        cached_only=cached_only,
+        max_symbols=max_symbols,
+    )
+    response = requests.post(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        json=payload,
+        timeout=30,
+    )
+    if response.status_code != 204:
+        message = response.text[:500] if response.text else response.reason
+        raise RuntimeError(f"GitHub workflow dispatch failed: HTTP {response.status_code} {message}")
+    return workflow_url
 
 
 def _results_panel(config: dict[str, Any], storage: Storage) -> None:

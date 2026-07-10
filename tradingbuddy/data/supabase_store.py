@@ -150,7 +150,29 @@ class SupabaseStore:
         )
 
     def save_scan_run(self, summary: dict[str, Any]) -> None:
-        self._post(self.scan_runs_table, [_json_clean(_keep_keys(summary, SCAN_RUN_COLUMNS))])
+        self._upsert_scan_run(summary)
+
+    def save_scan_result(
+        self,
+        summary: dict[str, Any],
+        minervini_frame: pd.DataFrame,
+        weekly_frame: pd.DataFrame,
+        overlap_history_frame: pd.DataFrame,
+    ) -> None:
+        pending_summary = dict(summary)
+        pending_summary["run_completed_at"] = None
+        self._upsert_scan_run(pending_summary)
+        self.save_minervini_shortlist(minervini_frame)
+        self.save_weekly_shortlist(weekly_frame)
+        self.save_overlap_history(overlap_history_frame)
+        self._upsert_scan_run(summary)
+
+    def _upsert_scan_run(self, summary: dict[str, Any]) -> None:
+        self._upsert(
+            self.scan_runs_table,
+            [_json_clean(_keep_keys(summary, SCAN_RUN_COLUMNS))],
+            conflict_column="run_id",
+        )
 
     def save_minervini_shortlist(self, frame: pd.DataFrame) -> None:
         self._post_frame(self.minervini_table, frame, MINERVINI_COLUMNS)
@@ -246,6 +268,7 @@ class SupabaseStore:
             self.scan_runs_table,
             params={
                 "select": "*",
+                "run_completed_at": "not.is.null",
                 "order": "run_started_at.desc",
                 "limit": "1",
             },

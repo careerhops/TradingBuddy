@@ -55,6 +55,10 @@ KITE_REDIRECT_URL = "https://your-streamlit-app.streamlit.app"
 DATA_ROOT = "data"
 SUPABASE_URL = "https://your-project.supabase.co"
 SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"
+GITHUB_ACTIONS_TOKEN = "github-token-with-actions-write"
+GITHUB_REPOSITORY = "careerhops/TradingBuddy"
+GITHUB_WORKFLOW_ID = "run-scan.yml"
+GITHUB_BRANCH = "main"
 ```
 
 For Streamlit Community Cloud, update the Kite developer console redirect URL to the deployed Streamlit app URL. The redirect URL is the app's root URL, not an `/auth/...` callback path. Example:
@@ -90,14 +94,29 @@ One-time GitHub repo setup:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
 
-Run a cloud scan:
+One-time Streamlit setup for starting GitHub scans from the app:
+
+1. Create a GitHub fine-grained token for this repository.
+2. Give it **Actions: Read and write** and **Contents: Read-only** permissions.
+3. Add it to Streamlit Secrets as `GITHUB_ACTIONS_TOKEN`.
+4. Keep `GITHUB_REPOSITORY`, `GITHUB_WORKFLOW_ID`, and `GITHUB_BRANCH` in Streamlit Secrets as shown above.
+
+Run a durable cloud scan from Streamlit:
+
+1. Login to Kite from the Streamlit admin screen. This saves a 24-hour Kite token in Supabase.
+2. In **Scanner > Durable Cloud Scan**, select **Fresh Kite refresh**.
+3. Keep symbol limit as `0`.
+4. Click **Start durable fresh scan**.
+5. Use the workflow link to monitor completion, then refresh Streamlit results.
+
+Run a cloud scan directly from GitHub:
 
 1. Login to Kite from the Streamlit admin screen. This saves a 24-hour Kite token in Supabase.
 2. In GitHub, open **Actions > Run TradingBuddy scan**.
 3. Click **Run workflow**.
 4. Leave `cached_only` as `false` and `max_symbols` as `0` for a full refresh.
 
-The workflow runs `python scripts/run_scan.py`, writes the scan outputs to Supabase, and does not depend on your browser session staying open. Streamlit reads the latest Supabase results when they are newer than local CSV results.
+The workflow runs `python scripts/run_scan.py --require-supabase`, writes the scan outputs to Supabase, and does not depend on your browser session staying open. The workflow fails if Supabase is not configured or if any required result table write fails. Streamlit reads the latest completed Supabase run when it is newer than local CSV results; incomplete runs are ignored until the Minervini, weekly, and overlap tables are saved.
 
 ## Supabase Setup
 

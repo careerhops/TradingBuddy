@@ -4,7 +4,7 @@ import unittest
 
 import pandas as pd
 
-from streamlit_app import _choose_result_bundle, _freshness_messages
+from streamlit_app import _choose_result_bundle, _freshness_messages, _github_workflow_dispatch_request
 
 
 def _bundle(source: str, started_at: str) -> dict[str, object]:
@@ -58,6 +58,23 @@ class ResultSourceTests(unittest.TestCase):
 
         self.assertEqual(messages[0][0], "info")
         self.assertIn("latest daily candle is 2026-07-09", messages[0][1])
+
+    def test_github_workflow_dispatch_request_uses_scan_inputs(self) -> None:
+        url, payload, workflow_url = _github_workflow_dispatch_request(
+            repo="careerhops/TradingBuddy",
+            workflow_id="run-scan.yml",
+            branch="main",
+            cached_only=False,
+            max_symbols=0,
+        )
+
+        self.assertEqual(
+            url,
+            "https://api.github.com/repos/careerhops/TradingBuddy/actions/workflows/run-scan.yml/dispatches",
+        )
+        self.assertEqual(payload["ref"], "main")
+        self.assertEqual(payload["inputs"], {"cached_only": "false", "max_symbols": "0"})
+        self.assertEqual(workflow_url, "https://github.com/careerhops/TradingBuddy/actions/workflows/run-scan.yml")
 
 
 if __name__ == "__main__":

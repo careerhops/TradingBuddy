@@ -18,6 +18,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the TradingBuddy scan outside Streamlit.")
     parser.add_argument("--cached-only", action="store_true", help="Use cached candle data instead of refreshing Kite.")
     parser.add_argument("--max-symbols", type=int, default=0, help="Optional symbol limit for test runs.")
+    parser.add_argument("--require-supabase", action="store_true", help="Fail unless the scan result is saved to Supabase.")
     args = parser.parse_args()
 
     config = load_config()
@@ -38,6 +39,8 @@ def main() -> None:
         f"{summary['weekly_buy_sell_count']} weekly BUY/SELL, "
         f"Supabase={summary.get('supabase_status', '-')}"
     )
+    if args.require_supabase and summary.get("supabase_status") != "saved":
+        raise SystemExit(f"Supabase save was required but finished as {summary.get('supabase_status', '-')}")
 
 
 def _progress(payload: dict[str, Any]) -> None:

@@ -228,14 +228,8 @@ def run_scan(
     supabase = SupabaseStore.from_config(config)
     if supabase is not None:
         try:
-            supabase.save_scan_run(summary)
-            supabase.save_minervini_shortlist(passed_results)
-            supabase.save_weekly_shortlist(weekly_results)
+            supabase.save_scan_result(summary, passed_results, weekly_results, overlap_history)
             summary["supabase_status"] = "saved"
-            try:
-                supabase.save_overlap_history(overlap_history)
-            except Exception as exc:
-                summary["supabase_status"] = f"saved_without_overlap_history: {exc}"
         except Exception as exc:
             summary["supabase_status"] = f"failed: {exc}"
 
