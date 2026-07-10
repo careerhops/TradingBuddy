@@ -97,6 +97,7 @@ class SupabaseStoreTests(unittest.TestCase):
         self.assertEqual(store.latest_params.get("scan_date"), "eq.2026-07-10")
         self.assertEqual(store.latest_params.get("refresh_mode"), "eq.kite_refresh")
         self.assertEqual(store.latest_params.get("run_completed_at"), "is.null")
+        self.assertEqual(store.latest_params.get("order"), "scan_rows_saved.desc,run_started_at.desc")
 
     def test_load_scan_rows_paginates_past_1000_rows(self) -> None:
         store = PagingSupabaseStore(total_rows=2305)

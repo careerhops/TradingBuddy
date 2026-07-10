@@ -348,7 +348,7 @@ class SupabaseStore:
                 "scan_date": f"eq.{scan_date}",
                 "refresh_mode": f"eq.{refresh_mode}",
                 "run_completed_at": "is.null",
-                "order": "run_started_at.desc",
+                "order": "scan_rows_saved.desc,run_started_at.desc",
                 "limit": "1",
             },
             error_label="Supabase incomplete scan run load failed",

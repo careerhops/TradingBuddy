@@ -118,7 +118,7 @@ Run a cloud scan directly from GitHub:
 
 The workflow runs `python scripts/run_scan.py --require-supabase`, writes raw scan rows to Supabase every 100 stocks, writes the final shortlist outputs to Supabase, and does not depend on your browser session staying open. The workflow fails if Supabase is not configured or if any required result table write fails. Streamlit reads the latest completed Supabase run when it is newer than local CSV results; incomplete runs are ignored until the Minervini, weekly, and overlap tables are saved.
 
-The **Run scan in this Streamlit session** section is enabled for full scans. Keep symbol limit as `0` to scan all NSE EQ stocks. With about 3306 stocks, the scanner writes roughly 34 Supabase batches before final shortlist tables are saved. If a scan stops before completion, running it again on the same day resumes the latest incomplete Kite refresh run and skips symbols already saved to `tradingbuddy_scan_rows`.
+The **Run scan in this Streamlit session** section is enabled for full scans. Keep symbol limit as `0` to scan all NSE EQ stocks. With about 3306 stocks, the scanner writes roughly 34 Supabase batches before final shortlist tables are saved. If a scan stops before completion, running it again on the same day resumes the most progressed incomplete Kite refresh run and skips symbols already saved to `tradingbuddy_scan_rows`.
 
 ## Supabase Setup
 
