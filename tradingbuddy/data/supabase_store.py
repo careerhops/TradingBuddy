@@ -22,7 +22,59 @@ SCAN_RUN_COLUMNS = {
     "minervini_pass_count",
     "weekly_buy_sell_count",
     "overlap_count",
+    "scan_rows_saved",
     "latest_candle_date",
+}
+
+SCAN_ROW_COLUMNS = {
+    "run_id",
+    "run_started_at",
+    "scan_sequence",
+    "exchange",
+    "symbol",
+    "tradingview_symbol",
+    "name",
+    "instrument_token",
+    "fetch_status",
+    "fetch_error",
+    "new_rows",
+    "as_of_date",
+    "daily_rows",
+    "close",
+    "current_price",
+    "price_source",
+    "sma_50",
+    "sma_150",
+    "sma_200",
+    "sma_200_prior",
+    "high_52w",
+    "low_52w",
+    "pct_above_52w_low",
+    "pct_below_52w_high",
+    "relative_strength_return_pct",
+    "relative_strength_rank",
+    "minervini_pass_count",
+    "passes_minervini",
+    "rule_1_price_above_150_200_sma",
+    "rule_2_sma150_above_sma200",
+    "rule_3_sma200_trending_up",
+    "rule_4_sma50_above_150_200",
+    "rule_5_price_above_sma50",
+    "rule_6_price_30pct_above_52w_low",
+    "rule_7_price_within_25pct_of_52w_high",
+    "rule_8_relative_strength_rank_70",
+    "scan_note",
+    "latest_weekly_signal",
+    "latest_weekly_signal_date",
+    "latest_weekly_signal_close",
+    "bars_since_weekly_signal",
+    "fresh_weekly_signal",
+    "fresh_weekly_buy",
+    "weekly_volume_confirmation",
+    "weekly_volume_confirmation_ratio",
+    "weekly_trend_confirmation",
+    "weekly_demand_zone",
+    "weekly_supply_zone",
 }
 
 MINERVINI_COLUMNS = {
@@ -112,6 +164,7 @@ class SupabaseStore:
         url: str,
         service_role_key: str,
         scan_runs_table: str,
+        scan_rows_table: str,
         minervini_table: str,
         weekly_table: str,
         overlap_history_table: str,
@@ -121,6 +174,7 @@ class SupabaseStore:
         self.url = url.rstrip("/")
         self.service_role_key = service_role_key
         self.scan_runs_table = scan_runs_table
+        self.scan_rows_table = scan_rows_table
         self.minervini_table = minervini_table
         self.weekly_table = weekly_table
         self.overlap_history_table = overlap_history_table
@@ -142,6 +196,7 @@ class SupabaseStore:
             url=url,
             service_role_key=key,
             scan_runs_table=str(cfg.get("scan_runs_table", "tradingbuddy_scan_runs")),
+            scan_rows_table=str(cfg.get("scan_rows_table", "tradingbuddy_scan_rows")),
             minervini_table=str(cfg.get("minervini_table", "tradingbuddy_minervini_shortlists")),
             weekly_table=str(cfg.get("weekly_table", "tradingbuddy_weekly_buy_sell_shortlists")),
             overlap_history_table=str(cfg.get("overlap_history_table", "tradingbuddy_overlap_history")),
@@ -176,6 +231,15 @@ class SupabaseStore:
 
     def save_minervini_shortlist(self, frame: pd.DataFrame) -> None:
         self._post_frame(self.minervini_table, frame, MINERVINI_COLUMNS)
+
+    def save_scan_rows(self, frame: pd.DataFrame, batch_size: int = 200) -> None:
+        self._upsert_frame(
+            self.scan_rows_table,
+            frame,
+            SCAN_ROW_COLUMNS,
+            conflict_column="run_id,exchange,symbol",
+            batch_size=batch_size,
+        )
 
     def save_weekly_shortlist(self, frame: pd.DataFrame) -> None:
         self._post_frame(self.weekly_table, frame, WEEKLY_COLUMNS)
@@ -300,6 +364,18 @@ class SupabaseStore:
         )
         return pd.DataFrame(rows)
 
+    def load_scan_rows(self, run_id: str) -> pd.DataFrame:
+        rows = self._get(
+            self.scan_rows_table,
+            params={
+                "run_id": f"eq.{run_id}",
+                "select": "*",
+                "order": "scan_sequence.asc",
+            },
+            error_label="Supabase scan rows load failed",
+        )
+        return pd.DataFrame(rows)
+
     def load_weekly_shortlist(self, run_id: str) -> pd.DataFrame:
         rows = self._get(
             self.weekly_table,
@@ -330,6 +406,21 @@ class SupabaseStore:
         records = [_json_clean(_keep_keys(row, allowed_columns)) for row in frame.to_dict(orient="records")]
         for start in range(0, len(records), 500):
             self._post(table, records[start : start + 500])
+
+    def _upsert_frame(
+        self,
+        table: str,
+        frame: pd.DataFrame,
+        allowed_columns: set[str],
+        conflict_column: str,
+        batch_size: int = 200,
+    ) -> None:
+        if frame.empty:
+            return
+        records = [_json_clean(_keep_keys(row, allowed_columns)) for row in frame.to_dict(orient="records")]
+        chunk_size = max(int(batch_size), 1)
+        for start in range(0, len(records), chunk_size):
+            self._upsert(table, records[start : start + chunk_size], conflict_column=conflict_column)
 
     def _post(self, table: str, records: list[dict[str, Any]]) -> None:
         if not records:

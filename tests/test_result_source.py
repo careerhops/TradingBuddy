@@ -70,7 +70,6 @@ class ResultSourceTests(unittest.TestCase):
             repo="careerhops/TradingBuddy",
             workflow_id="run-scan.yml",
             branch="main",
-            cached_only=False,
             max_symbols=0,
         )
 
@@ -79,7 +78,7 @@ class ResultSourceTests(unittest.TestCase):
             "https://api.github.com/repos/careerhops/TradingBuddy/actions/workflows/run-scan.yml/dispatches",
         )
         self.assertEqual(payload["ref"], "main")
-        self.assertEqual(payload["inputs"], {"cached_only": "false", "max_symbols": "0"})
+        self.assertEqual(payload["inputs"], {"max_symbols": "0"})
         self.assertEqual(workflow_url, "https://github.com/careerhops/TradingBuddy/actions/workflows/run-scan.yml")
 
     def test_github_workflow_dispatch_request_accepts_github_urls(self) -> None:
@@ -87,7 +86,6 @@ class ResultSourceTests(unittest.TestCase):
             repo="https://github.com/careerhops/TradingBuddy",
             workflow_id="https://github.com/careerhops/TradingBuddy/actions/workflows/run-scan.yml",
             branch="main",
-            cached_only=True,
             max_symbols=50,
         )
 
@@ -95,7 +93,7 @@ class ResultSourceTests(unittest.TestCase):
             url,
             "https://api.github.com/repos/careerhops/TradingBuddy/actions/workflows/run-scan.yml/dispatches",
         )
-        self.assertEqual(payload["inputs"], {"cached_only": "true", "max_symbols": "50"})
+        self.assertEqual(payload["inputs"], {"max_symbols": "50"})
         self.assertEqual(workflow_url, "https://github.com/careerhops/TradingBuddy/actions/workflows/run-scan.yml")
 
     def test_github_config_normalizers_accept_common_values(self) -> None:

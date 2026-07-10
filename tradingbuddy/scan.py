@@ -65,6 +65,8 @@ def run_scan(
     history_years = int(config.get("data", {}).get("history_years", 2))
     today = run_started.date()
     start_date = today - timedelta(days=365 * history_years)
+    supabase = SupabaseStore.from_config(config)
+    supabase_batch_size = max(int(config.get("supabase", {}).get("scan_row_batch_size", 200)), 1)
 
     provider: KiteDataProvider | None = None
     if refresh_data:
@@ -77,12 +79,11 @@ def run_scan(
 
         _emit(progress_callback, phase="Loading Kite NSE instruments", completed=0, total=0)
         instruments = provider.instruments("NSE")
-        storage.save_instruments(instruments)
     else:
-        _emit(progress_callback, phase="Loading cached instruments", completed=0, total=0)
+        _emit(progress_callback, phase="Loading local instruments", completed=0, total=0)
         instruments = storage.load_instruments()
         if instruments.empty:
-            raise RuntimeError("No cached instruments found. Run once with Kite data refresh enabled.")
+            raise RuntimeError("No local instruments found. Run once with Kite data refresh enabled.")
 
     universe = build_universe(instruments, config)
     if max_symbols is not None and max_symbols > 0:
@@ -93,6 +94,27 @@ def run_scan(
     updated_symbols = 0
     failed_symbols = 0
     failure_examples: list[str] = []
+    scan_rows_saved = 0
+    scan_row_batch: list[dict[str, Any]] = []
+
+    pending_summary = {
+        "run_id": run_id,
+        "run_started_at": run_started.isoformat(),
+        "run_completed_at": None,
+        "scan_date": str(today),
+        "history_start_date": str(start_date),
+        "symbols_scanned": 0,
+        "symbols_updated": 0,
+        "symbols_failed": 0,
+        "minervini_pass_count": 0,
+        "weekly_buy_sell_count": 0,
+        "overlap_count": 0,
+        "scan_rows_saved": 0,
+        "latest_candle_date": None,
+        "refresh_mode": "kite_refresh" if refresh_data else "local_files",
+    }
+    if supabase is not None:
+        supabase.save_scan_run(pending_summary)
 
     _emit(progress_callback, phase="Universe ready", completed=0, total=len(universe))
     for completed, (_, instrument) in enumerate(universe.iterrows(), start=1):
@@ -103,14 +125,14 @@ def run_scan(
 
         _emit(
             progress_callback,
-            phase="Fetching candles" if refresh_data else "Using cached candles",
+            phase="Fetching candles" if refresh_data else "Using local candle files",
             completed=completed - 1,
             total=len(universe),
             current_symbol=symbol,
         )
 
-        existing = storage.load_candles(exchange, symbol, "1D")
-        fetch_status = "cached"
+        existing = storage.load_candles(exchange, symbol, "1D") if not refresh_data else _empty_daily_frame()
+        fetch_status = "fresh" if refresh_data else "local_file"
         fetch_error = ""
         new_rows = 0
 
@@ -118,20 +140,15 @@ def run_scan(
             try:
                 if pd.isna(token):
                     raise RuntimeError("Missing instrument_token")
-                from_date = _fetch_start_date(existing, start_date)
-                if from_date <= today:
-                    assert provider is not None
-                    new_daily = provider.daily_candles(int(token), from_date, today)
-                    new_rows = len(new_daily)
-                    daily = storage.merge_and_save_candles(exchange, symbol, new_daily, "1D")
-                    fetch_status = "updated" if new_rows else "already_current"
-                    if new_rows:
-                        updated_symbols += 1
-                    if request_sleep > 0:
-                        time.sleep(request_sleep)
-                else:
-                    daily = existing
-                    fetch_status = "already_current"
+                assert provider is not None
+                new_daily = provider.daily_candles(int(token), start_date, today)
+                new_rows = len(new_daily)
+                daily = new_daily if new_rows else _empty_daily_frame()
+                fetch_status = "updated" if new_rows else "no_data"
+                if new_rows:
+                    updated_symbols += 1
+                if request_sleep > 0:
+                    time.sleep(request_sleep)
             except Exception as exc:
                 failed_symbols += 1
                 fetch_status = "failed"
@@ -146,20 +163,23 @@ def run_scan(
         minervini_row = build_minervini_snapshot(history, config)
         weekly_row = latest_weekly_signal(history, config)
 
-        rows.append(
-            {
-                "exchange": exchange,
-                "symbol": symbol,
-                "tradingview_symbol": f"{exchange}:{symbol}",
-                "name": name,
-                "instrument_token": token,
-                "fetch_status": fetch_status,
-                "fetch_error": fetch_error,
-                "new_rows": int(new_rows),
-                **minervini_row,
-                **weekly_row,
-            }
-        )
+        row = {
+            "run_id": run_id,
+            "run_started_at": run_started.isoformat(),
+            "scan_sequence": int(completed),
+            "exchange": exchange,
+            "symbol": symbol,
+            "tradingview_symbol": f"{exchange}:{symbol}",
+            "name": name,
+            "instrument_token": token,
+            "fetch_status": fetch_status,
+            "fetch_error": fetch_error,
+            "new_rows": int(new_rows),
+            **minervini_row,
+            **weekly_row,
+        }
+        rows.append(row)
+        scan_row_batch.append(row)
 
         _emit(
             progress_callback,
@@ -168,6 +188,42 @@ def run_scan(
             total=len(universe),
             current_symbol=symbol,
         )
+        if supabase is not None and len(scan_row_batch) >= supabase_batch_size:
+            saved_count = _flush_scan_row_batch(
+                supabase=supabase,
+                batch=scan_row_batch,
+                batch_size=supabase_batch_size,
+                progress_callback=progress_callback,
+            )
+            scan_rows_saved += saved_count
+            pending_summary.update(
+                {
+                    "symbols_scanned": int(completed),
+                    "symbols_updated": int(updated_symbols),
+                    "symbols_failed": int(failed_symbols),
+                    "scan_rows_saved": int(scan_rows_saved),
+                }
+            )
+            supabase.save_scan_run(pending_summary)
+
+    if supabase is not None:
+        saved_count = _flush_scan_row_batch(
+            supabase=supabase,
+            batch=scan_row_batch,
+            batch_size=supabase_batch_size,
+            progress_callback=progress_callback,
+        )
+        scan_rows_saved += saved_count
+        pending_summary.update(
+            {
+                "symbols_scanned": int(len(universe)),
+                "symbols_updated": int(updated_symbols),
+                "symbols_failed": int(failed_symbols),
+                "scan_rows_saved": int(scan_rows_saved),
+            }
+        )
+        supabase.save_scan_run(pending_summary)
+        rows = supabase.load_scan_rows(run_id).to_dict(orient="records")
 
     if refresh_data:
         _validate_refresh_quality(
@@ -216,8 +272,9 @@ def run_scan(
         "minervini_pass_count": int(len(passed_results)),
         "weekly_buy_sell_count": int(len(weekly_results)),
         "overlap_count": int(len(overlap_history)),
+        "scan_rows_saved": int(scan_rows_saved),
         "latest_candle_date": latest_date,
-        "refresh_mode": "kite_refresh" if refresh_data else "cached_only",
+        "refresh_mode": "kite_refresh" if refresh_data else "local_files",
         "ltp_status": ltp_status,
         "all_results_path": str(all_path),
         "passed_results_path": str(pass_path),
@@ -225,9 +282,10 @@ def run_scan(
         "overlap_history_path": str(overlap_path),
         "supabase_status": "not_configured",
     }
-    supabase = SupabaseStore.from_config(config)
     if supabase is not None:
         try:
+            supabase.save_scan_rows(all_results, batch_size=supabase_batch_size)
+            summary["scan_rows_saved"] = int(len(all_results))
             supabase.save_scan_result(summary, passed_results, weekly_results, overlap_history)
             summary["supabase_status"] = "saved"
         except Exception as exc:
@@ -319,13 +377,24 @@ def _daily_close_on_date(daily: pd.DataFrame, target_date: object) -> Any:
     return _to_float(exact.iloc[-1]["close"])
 
 
-def _fetch_start_date(existing: pd.DataFrame, start_date: date) -> date:
-    if existing.empty:
-        return start_date
-    last_date = pd.to_datetime(existing["date"], errors="coerce").max()
-    if pd.isna(last_date):
-        return start_date
-    return max(start_date, pd.Timestamp(last_date).date())
+def _empty_daily_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+
+def _flush_scan_row_batch(
+    supabase: SupabaseStore,
+    batch: list[dict[str, Any]],
+    batch_size: int,
+    progress_callback: ProgressCallback | None = None,
+) -> int:
+    if not batch:
+        return 0
+    frame = pd.DataFrame(batch)
+    _emit(progress_callback, phase=f"Saving {len(frame)} scan rows to Supabase", completed=0, total=0)
+    supabase.save_scan_rows(frame, batch_size=batch_size)
+    saved_count = len(batch)
+    batch.clear()
+    return saved_count
 
 
 def _trim_history(daily: pd.DataFrame, start_date: date) -> pd.DataFrame:
@@ -444,7 +513,7 @@ def _validate_refresh_quality(
     suffix = f" Sample errors: {examples}" if examples else ""
     if updated_symbols == 0:
         raise RuntimeError(
-            "Kite refresh did not return candle rows for any symbol, so cached results were not saved as a fresh scan."
+            "Kite refresh did not return candle rows for any symbol, so no fresh scan was saved."
             + suffix
         )
 
@@ -452,7 +521,7 @@ def _validate_refresh_quality(
     if failure_rate >= 0.25:
         raise RuntimeError(
             f"Kite refresh failed for {failed_symbols}/{universe_size} symbols ({failure_rate:.0%}), "
-            "so cached results were not saved as a fresh scan."
+            "so no fresh scan was saved."
             + suffix
         )
 

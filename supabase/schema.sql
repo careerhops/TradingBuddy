@@ -11,12 +11,77 @@ create table if not exists public.tradingbuddy_scan_runs (
   minervini_pass_count integer not null default 0,
   weekly_buy_sell_count integer not null default 0,
   overlap_count integer not null default 0,
+  scan_rows_saved integer not null default 0,
   latest_candle_date date,
   created_at timestamptz not null default now()
 );
 
 alter table public.tradingbuddy_scan_runs
   add column if not exists overlap_count integer not null default 0;
+
+alter table public.tradingbuddy_scan_runs
+  add column if not exists scan_rows_saved integer not null default 0;
+
+create table if not exists public.tradingbuddy_scan_rows (
+  id bigserial primary key,
+  run_id text not null references public.tradingbuddy_scan_runs(run_id) on delete cascade,
+  run_started_at timestamptz not null,
+  scan_sequence integer not null,
+  exchange text not null,
+  symbol text not null,
+  tradingview_symbol text not null,
+  name text,
+  instrument_token bigint,
+  fetch_status text,
+  fetch_error text,
+  new_rows integer,
+  as_of_date date,
+  daily_rows integer,
+  close numeric,
+  current_price numeric,
+  price_source text,
+  sma_50 numeric,
+  sma_150 numeric,
+  sma_200 numeric,
+  sma_200_prior numeric,
+  high_52w numeric,
+  low_52w numeric,
+  pct_above_52w_low numeric,
+  pct_below_52w_high numeric,
+  relative_strength_return_pct numeric,
+  relative_strength_rank numeric,
+  minervini_pass_count integer,
+  passes_minervini boolean,
+  rule_1_price_above_150_200_sma boolean,
+  rule_2_sma150_above_sma200 boolean,
+  rule_3_sma200_trending_up boolean,
+  rule_4_sma50_above_150_200 boolean,
+  rule_5_price_above_sma50 boolean,
+  rule_6_price_30pct_above_52w_low boolean,
+  rule_7_price_within_25pct_of_52w_high boolean,
+  rule_8_relative_strength_rank_70 boolean,
+  scan_note text,
+  latest_weekly_signal text,
+  latest_weekly_signal_date date,
+  latest_weekly_signal_close numeric,
+  bars_since_weekly_signal integer,
+  fresh_weekly_signal boolean,
+  fresh_weekly_buy boolean,
+  weekly_volume_confirmation boolean,
+  weekly_volume_confirmation_ratio numeric,
+  weekly_trend_confirmation boolean,
+  weekly_demand_zone numeric,
+  weekly_supply_zone numeric,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (run_id, exchange, symbol)
+);
+
+create index if not exists tradingbuddy_scan_rows_run_idx
+  on public.tradingbuddy_scan_rows(run_id, scan_sequence);
+
+create index if not exists tradingbuddy_scan_rows_symbol_idx
+  on public.tradingbuddy_scan_rows(symbol, run_started_at desc);
 
 create table if not exists public.tradingbuddy_minervini_shortlists (
   id bigserial primary key,

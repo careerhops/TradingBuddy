@@ -16,7 +16,6 @@ from tradingbuddy.scan import run_scan  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the TradingBuddy scan outside Streamlit.")
-    parser.add_argument("--cached-only", action="store_true", help="Use cached candle data instead of refreshing Kite.")
     parser.add_argument("--max-symbols", type=int, default=0, help="Optional symbol limit for test runs.")
     parser.add_argument("--require-supabase", action="store_true", help="Fail unless the scan result is saved to Supabase.")
     args = parser.parse_args()
@@ -27,7 +26,7 @@ def main() -> None:
     result = run_scan(
         config,
         storage,
-        refresh_data=not args.cached_only,
+        refresh_data=True,
         max_symbols=args.max_symbols if args.max_symbols > 0 else None,
         progress_callback=_progress,
     )

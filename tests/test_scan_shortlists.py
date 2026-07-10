@@ -9,7 +9,6 @@ from tradingbuddy.scan import (
     _build_overlap_history,
     _build_weekly_shortlist,
     _daily_close_on_date,
-    _fetch_start_date,
     _validate_refresh_quality,
 )
 
@@ -75,13 +74,6 @@ class ScanShortlistTests(unittest.TestCase):
         self.assertEqual(float(overlap.iloc[0]["signal_price"]), 95.0)
         self.assertEqual(float(overlap.iloc[0]["scan_close_price"]), 100.0)
         self.assertAlmostEqual(float(overlap.iloc[0]["gain_loss_pct"]), 5.2631578947)
-
-    def test_fetch_start_date_refetches_latest_cached_date_for_overwrite(self) -> None:
-        existing = pd.DataFrame({"date": [pd.Timestamp("2026-07-06"), pd.Timestamp("2026-07-07")]})
-
-        from_date = _fetch_start_date(existing, pd.Timestamp("2024-07-07").date())
-
-        self.assertEqual(from_date, pd.Timestamp("2026-07-07").date())
 
     def test_signal_price_uses_daily_close_for_signal_date(self) -> None:
         daily = pd.DataFrame(

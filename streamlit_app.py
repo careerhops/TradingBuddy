@@ -325,7 +325,7 @@ def _scan_panel(config: dict[str, Any], storage: Storage) -> None:
     latest_summary = bundle["summary"]
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Cached stocks", _scanned_count(latest, latest_summary))
+    col1.metric("Scanned stocks", _scanned_count(latest, latest_summary))
     col2.metric("Minervini", len(latest_pass) if not latest_pass.empty else 0)
     col3.metric("Weekly BUY/SELL", len(latest_weekly) if not latest_weekly.empty else 0)
     col4.metric("Latest candle", _latest_candle_date(latest, latest_summary))
@@ -367,25 +367,15 @@ def _github_scan_panel() -> None:
 
     st.caption(f"GitHub workflow: {settings['repo']} / {settings['workflow_id']} on {settings['branch']}")
     with st.form("github_scan"):
-        scan_mode = st.radio(
-            "Cloud scan mode",
-            ["Fresh Kite refresh", "Use cached candles"],
-            index=0,
-            horizontal=True,
-            help="Runs outside Streamlit using GitHub Actions and writes results to Supabase when complete.",
-        )
+        st.caption("Runs a fresh Kite scan outside Streamlit and writes batches to Supabase while the scan is running.")
         limit_symbols = st.number_input("Cloud symbol limit (0 means all)", min_value=0, max_value=10000, value=0, step=50)
-        submitted = st.form_submit_button(
-            "Start durable fresh scan" if scan_mode == "Fresh Kite refresh" else "Start durable cached scan",
-            type="primary",
-        )
+        submitted = st.form_submit_button("Start durable fresh scan", type="primary")
 
     if not submitted:
         return
 
     try:
         workflow_url = _dispatch_github_scan(
-            cached_only=scan_mode == "Use cached candles",
             max_symbols=int(limit_symbols),
         )
     except Exception as exc:
@@ -408,13 +398,7 @@ def _streamlit_session_scan_form(config: dict[str, Any], storage: Storage) -> No
         limit_help = "Full-universe scans are disabled here to avoid browser/session cancellation."
 
     with st.form("run_scan"):
-        scan_mode = st.radio(
-            "Scan mode",
-            ["Fresh Kite refresh", "Use cached candles"],
-            index=0,
-            horizontal=True,
-            help="Fresh Kite refresh fetches the latest Kite candles before applying Minervini and weekly BUY/SELL rules.",
-        )
+        st.caption("Runs a fresh Kite scan. Cached-candle scans are disabled.")
         limit_symbols = st.number_input(
             "Session symbol limit",
             min_value=0,
@@ -423,7 +407,7 @@ def _streamlit_session_scan_form(config: dict[str, Any], storage: Storage) -> No
             step=50,
             help=limit_help,
         )
-        submitted = st.form_submit_button("Run fresh scan" if scan_mode == "Fresh Kite refresh" else "Run cached scan", type="primary")
+        submitted = st.form_submit_button("Run fresh scan", type="primary")
 
     if not submitted:
         return
@@ -454,7 +438,7 @@ def _streamlit_session_scan_form(config: dict[str, Any], storage: Storage) -> No
         result = run_scan(
             config,
             storage,
-            refresh_data=scan_mode == "Fresh Kite refresh",
+            refresh_data=True,
             max_symbols=int(limit_symbols) if int(limit_symbols) > 0 else None,
             progress_callback=progress,
         )
@@ -544,7 +528,6 @@ def _github_workflow_dispatch_request(
     repo: str,
     workflow_id: str,
     branch: str,
-    cached_only: bool,
     max_symbols: int,
 ) -> tuple[str, dict[str, Any], str]:
     normalized_repo = _normalize_github_repository(repo)
@@ -557,7 +540,6 @@ def _github_workflow_dispatch_request(
     payload = {
         "ref": normalized_branch,
         "inputs": {
-            "cached_only": "true" if cached_only else "false",
             "max_symbols": str(safe_max_symbols),
         },
     }
@@ -565,7 +547,7 @@ def _github_workflow_dispatch_request(
     return url, payload, workflow_url
 
 
-def _dispatch_github_scan(*, cached_only: bool, max_symbols: int) -> str:
+def _dispatch_github_scan(*, max_symbols: int) -> str:
     settings = _github_scan_settings()
     token = settings["token"]
     if not token:
@@ -575,7 +557,6 @@ def _dispatch_github_scan(*, cached_only: bool, max_symbols: int) -> str:
         repo=settings["repo"],
         workflow_id=settings["workflow_id"],
         branch=settings["branch"],
-        cached_only=cached_only,
         max_symbols=max_symbols,
     )
     response = requests.post(
@@ -971,6 +952,7 @@ def _display_frame(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
             "minervini_pass_count",
             "weekly_buy_sell_count",
             "overlap_count",
+            "scan_rows_saved",
             "latest_candle_date",
             "ltp_status",
             "supabase_status",
