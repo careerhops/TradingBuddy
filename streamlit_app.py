@@ -79,6 +79,7 @@ def _copy_streamlit_secrets_to_env() -> None:
         "GITHUB_REPOSITORY",
         "GITHUB_WORKFLOW_ID",
         "GITHUB_BRANCH",
+        "ALLOW_STREAMLIT_FULL_SCAN",
     ):
         try:
             value = secrets.get(key)
@@ -358,6 +359,13 @@ def _github_scan_panel() -> None:
         )
         return
 
+    try:
+        settings = _github_scan_settings()
+    except ValueError as exc:
+        st.error(f"GitHub scan configuration error: {exc}")
+        return
+
+    st.caption(f"GitHub workflow: {settings['repo']} / {settings['workflow_id']} on {settings['branch']}")
     with st.form("github_scan"):
         scan_mode = st.radio(
             "Cloud scan mode",
@@ -389,7 +397,16 @@ def _github_scan_panel() -> None:
 
 
 def _streamlit_session_scan_form(config: dict[str, Any], storage: Storage) -> None:
-    st.warning("Full scans in Streamlit can stop if the browser disconnects. Prefer Durable Cloud Scan for full NSE runs.")
+    full_session_scan_allowed = _allow_streamlit_full_scan()
+    if full_session_scan_allowed:
+        st.warning("Full scans in Streamlit can stop if the browser disconnects. Prefer Durable Cloud Scan for full NSE runs.")
+        default_limit = 0
+        limit_help = "0 scans all symbols. Use only for local/debug runs."
+    else:
+        st.warning("In-session scans are for small tests only. Full NSE scans must use Durable Cloud Scan.")
+        default_limit = 100
+        limit_help = "Full-universe scans are disabled here to avoid browser/session cancellation."
+
     with st.form("run_scan"):
         scan_mode = st.radio(
             "Scan mode",
@@ -398,10 +415,24 @@ def _streamlit_session_scan_form(config: dict[str, Any], storage: Storage) -> No
             horizontal=True,
             help="Fresh Kite refresh fetches the latest Kite candles before applying Minervini and weekly BUY/SELL rules.",
         )
-        limit_symbols = st.number_input("Symbol limit (0 means all)", min_value=0, max_value=10000, value=0, step=50)
+        limit_symbols = st.number_input(
+            "Session symbol limit",
+            min_value=0,
+            max_value=10000,
+            value=default_limit,
+            step=50,
+            help=limit_help,
+        )
         submitted = st.form_submit_button("Run fresh scan" if scan_mode == "Fresh Kite refresh" else "Run cached scan", type="primary")
 
     if not submitted:
+        return
+
+    if int(limit_symbols) == 0 and not full_session_scan_allowed:
+        st.error(
+            "Full NSE scans are disabled in the Streamlit session because they can be cancelled when the browser disconnects. "
+            "Use Durable Cloud Scan, or set ALLOW_STREAMLIT_FULL_SCAN=true only for local debugging."
+        )
         return
 
     progress_bar = st.progress(0)
@@ -449,12 +480,63 @@ def _github_scan_configured() -> bool:
 
 
 def _github_scan_settings() -> dict[str, str]:
+    branch = os.getenv("GITHUB_BRANCH", "main").strip()
+    if not branch:
+        raise ValueError("GITHUB_BRANCH is empty.")
     return {
         "token": os.getenv("GITHUB_ACTIONS_TOKEN", "").strip(),
-        "repo": os.getenv("GITHUB_REPOSITORY", "careerhops/TradingBuddy").strip(),
-        "workflow_id": os.getenv("GITHUB_WORKFLOW_ID", "run-scan.yml").strip(),
-        "branch": os.getenv("GITHUB_BRANCH", "main").strip(),
+        "repo": _normalize_github_repository(os.getenv("GITHUB_REPOSITORY", "careerhops/TradingBuddy")),
+        "workflow_id": _normalize_github_workflow_id(os.getenv("GITHUB_WORKFLOW_ID", "run-scan.yml")),
+        "branch": branch,
     }
+
+
+def _normalize_github_repository(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("GITHUB_REPOSITORY is empty. Use owner/repo, for example careerhops/TradingBuddy.")
+
+    parsed = urlparse(raw)
+    if parsed.scheme:
+        path = parsed.path
+        if parsed.netloc.lower() == "api.github.com" and path.startswith("/repos/"):
+            path = path[len("/repos/") :]
+    elif raw.startswith("git@github.com:"):
+        path = raw.split(":", 1)[1]
+    else:
+        path = raw
+
+    path = path.strip("/")
+    if path.startswith("github.com/"):
+        path = path[len("github.com/") :]
+    if path.startswith("repos/"):
+        path = path[len("repos/") :]
+
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2:
+        raise ValueError("GITHUB_REPOSITORY must be owner/repo, for example careerhops/TradingBuddy.")
+    owner = parts[0]
+    repo = parts[1]
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return f"{owner}/{repo}"
+
+
+def _normalize_github_workflow_id(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("GITHUB_WORKFLOW_ID is empty. Use run-scan.yml.")
+
+    parsed = urlparse(raw)
+    path = parsed.path if parsed.scheme else raw
+    parts = [part for part in path.strip("/").split("/") if part]
+    if "workflows" in parts:
+        index = parts.index("workflows")
+        if index + 1 < len(parts):
+            return parts[index + 1]
+    if len(parts) > 1:
+        return parts[-1]
+    return raw
 
 
 def _github_workflow_dispatch_request(
@@ -465,16 +547,21 @@ def _github_workflow_dispatch_request(
     cached_only: bool,
     max_symbols: int,
 ) -> tuple[str, dict[str, Any], str]:
+    normalized_repo = _normalize_github_repository(repo)
+    normalized_workflow_id = _normalize_github_workflow_id(workflow_id)
+    normalized_branch = str(branch or "").strip()
+    if not normalized_branch:
+        raise ValueError("GITHUB_BRANCH is empty.")
     safe_max_symbols = max(int(max_symbols), 0)
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
+    url = f"https://api.github.com/repos/{normalized_repo}/actions/workflows/{normalized_workflow_id}/dispatches"
     payload = {
-        "ref": branch,
+        "ref": normalized_branch,
         "inputs": {
             "cached_only": "true" if cached_only else "false",
             "max_symbols": str(safe_max_symbols),
         },
     }
-    workflow_url = f"https://github.com/{repo}/actions/workflows/{workflow_id}"
+    workflow_url = f"https://github.com/{normalized_repo}/actions/workflows/{normalized_workflow_id}"
     return url, payload, workflow_url
 
 
@@ -502,9 +589,26 @@ def _dispatch_github_scan(*, cached_only: bool, max_symbols: int) -> str:
         timeout=30,
     )
     if response.status_code != 204:
-        message = response.text[:500] if response.text else response.reason
+        message = _github_dispatch_error_message(response)
         raise RuntimeError(f"GitHub workflow dispatch failed: HTTP {response.status_code} {message}")
     return workflow_url
+
+
+def _github_dispatch_error_message(response: requests.Response) -> str:
+    body = response.text[:500] if response.text else response.reason
+    if response.status_code == 401:
+        return f"{body}. Check that GITHUB_ACTIONS_TOKEN is valid."
+    if response.status_code == 403:
+        return f"{body}. The token needs access to this repository and Actions read/write permission."
+    if response.status_code == 404:
+        return f"{body}. Check GITHUB_REPOSITORY and GITHUB_WORKFLOW_ID."
+    if response.status_code == 422:
+        return f"{body}. Check GITHUB_BRANCH and workflow_dispatch inputs."
+    return body
+
+
+def _allow_streamlit_full_scan() -> bool:
+    return os.getenv("ALLOW_STREAMLIT_FULL_SCAN", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _results_panel(config: dict[str, Any], storage: Storage) -> None:

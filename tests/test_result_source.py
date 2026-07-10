@@ -4,7 +4,13 @@ import unittest
 
 import pandas as pd
 
-from streamlit_app import _choose_result_bundle, _freshness_messages, _github_workflow_dispatch_request
+from streamlit_app import (
+    _choose_result_bundle,
+    _freshness_messages,
+    _github_workflow_dispatch_request,
+    _normalize_github_repository,
+    _normalize_github_workflow_id,
+)
 
 
 def _bundle(source: str, started_at: str) -> dict[str, object]:
@@ -75,6 +81,32 @@ class ResultSourceTests(unittest.TestCase):
         self.assertEqual(payload["ref"], "main")
         self.assertEqual(payload["inputs"], {"cached_only": "false", "max_symbols": "0"})
         self.assertEqual(workflow_url, "https://github.com/careerhops/TradingBuddy/actions/workflows/run-scan.yml")
+
+    def test_github_workflow_dispatch_request_accepts_github_urls(self) -> None:
+        url, payload, workflow_url = _github_workflow_dispatch_request(
+            repo="https://github.com/careerhops/TradingBuddy",
+            workflow_id="https://github.com/careerhops/TradingBuddy/actions/workflows/run-scan.yml",
+            branch="main",
+            cached_only=True,
+            max_symbols=50,
+        )
+
+        self.assertEqual(
+            url,
+            "https://api.github.com/repos/careerhops/TradingBuddy/actions/workflows/run-scan.yml/dispatches",
+        )
+        self.assertEqual(payload["inputs"], {"cached_only": "true", "max_symbols": "50"})
+        self.assertEqual(workflow_url, "https://github.com/careerhops/TradingBuddy/actions/workflows/run-scan.yml")
+
+    def test_github_config_normalizers_accept_common_values(self) -> None:
+        self.assertEqual(_normalize_github_repository("git@github.com:careerhops/TradingBuddy.git"), "careerhops/TradingBuddy")
+        self.assertEqual(_normalize_github_repository("https://api.github.com/repos/careerhops/TradingBuddy"), "careerhops/TradingBuddy")
+        self.assertEqual(_normalize_github_workflow_id(".github/workflows/run-scan.yml"), "run-scan.yml")
+        self.assertEqual(_normalize_github_workflow_id("309067668"), "309067668")
+
+    def test_github_repository_normalizer_rejects_invalid_value(self) -> None:
+        with self.assertRaises(ValueError):
+            _normalize_github_repository("TradingBuddy")
 
 
 if __name__ == "__main__":

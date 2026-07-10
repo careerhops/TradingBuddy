@@ -59,6 +59,7 @@ GITHUB_ACTIONS_TOKEN = "github-token-with-actions-write"
 GITHUB_REPOSITORY = "careerhops/TradingBuddy"
 GITHUB_WORKFLOW_ID = "run-scan.yml"
 GITHUB_BRANCH = "main"
+ALLOW_STREAMLIT_FULL_SCAN = "false"
 ```
 
 For Streamlit Community Cloud, update the Kite developer console redirect URL to the deployed Streamlit app URL. The redirect URL is the app's root URL, not an `/auth/...` callback path. Example:
@@ -117,6 +118,8 @@ Run a cloud scan directly from GitHub:
 4. Leave `cached_only` as `false` and `max_symbols` as `0` for a full refresh.
 
 The workflow runs `python scripts/run_scan.py --require-supabase`, writes the scan outputs to Supabase, and does not depend on your browser session staying open. The workflow fails if Supabase is not configured or if any required result table write fails. Streamlit reads the latest completed Supabase run when it is newer than local CSV results; incomplete runs are ignored until the Minervini, weekly, and overlap tables are saved.
+
+The **Run scan in this Streamlit session** section is only for small local/debug scans. Full NSE scans are blocked there by default because they can be cancelled by Streamlit browser/session disconnects. To override that locally only, set `ALLOW_STREAMLIT_FULL_SCAN=true`.
 
 ## Supabase Setup
 
