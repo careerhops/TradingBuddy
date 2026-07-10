@@ -67,6 +67,7 @@ def run_scan(
     start_date = today - timedelta(days=365 * history_years)
     supabase = SupabaseStore.from_config(config)
     supabase_batch_size = max(int(config.get("supabase", {}).get("scan_row_batch_size", 100)), 1)
+    run_started_at = run_started.isoformat()
 
     provider: KiteDataProvider | None = None
     if refresh_data:
@@ -96,32 +97,67 @@ def run_scan(
     failure_examples: list[str] = []
     scan_rows_saved = 0
     scan_row_batch: list[dict[str, Any]] = []
+    saved_scan_keys: set[tuple[str, str]] = set()
+
+    resume_run: dict[str, Any] | None = None
+    if supabase is not None and refresh_data:
+        resume_run = supabase.load_latest_incomplete_scan_run(str(today), refresh_mode="kite_refresh")
+        if resume_run:
+            run_id = str(resume_run.get("run_id") or run_id)
+            run_started_at = str(resume_run.get("run_started_at") or run_started_at)
+            saved_rows = supabase.load_scan_rows(run_id)
+            if not saved_rows.empty and {"exchange", "symbol"}.issubset(saved_rows.columns):
+                saved_rows["exchange"] = saved_rows["exchange"].astype(str).str.upper().str.strip()
+                saved_rows["symbol"] = saved_rows["symbol"].astype(str).str.upper().str.strip()
+                saved_scan_keys = set(zip(saved_rows["exchange"], saved_rows["symbol"]))
+            scan_rows_saved = len(saved_scan_keys)
+            updated_symbols = int(resume_run.get("symbols_updated") or 0)
+            failed_symbols = int(resume_run.get("symbols_failed") or 0)
 
     pending_summary = {
         "run_id": run_id,
-        "run_started_at": run_started.isoformat(),
+        "run_started_at": run_started_at,
         "run_completed_at": None,
         "scan_date": str(today),
         "history_start_date": str(start_date),
-        "symbols_scanned": 0,
-        "symbols_updated": 0,
-        "symbols_failed": 0,
+        "symbols_scanned": int(resume_run.get("symbols_scanned") or scan_rows_saved) if resume_run else 0,
+        "symbols_updated": int(updated_symbols),
+        "symbols_failed": int(failed_symbols),
         "minervini_pass_count": 0,
         "weekly_buy_sell_count": 0,
         "overlap_count": 0,
-        "scan_rows_saved": 0,
+        "scan_rows_saved": int(scan_rows_saved),
         "latest_candle_date": None,
         "refresh_mode": "kite_refresh" if refresh_data else "local_files",
     }
     if supabase is not None:
         supabase.save_scan_run(pending_summary)
 
-    _emit(progress_callback, phase="Universe ready", completed=0, total=len(universe))
+    if saved_scan_keys:
+        _emit(
+            progress_callback,
+            phase=f"Resuming saved run {run_id}",
+            completed=len(saved_scan_keys),
+            total=len(universe),
+        )
+
+    _emit(progress_callback, phase="Universe ready", completed=len(saved_scan_keys), total=len(universe))
     for completed, (_, instrument) in enumerate(universe.iterrows(), start=1):
         exchange = str(instrument.get("exchange", "NSE")).upper()
         symbol = str(instrument.get("tradingsymbol", "")).upper().strip()
         name = str(instrument.get("name", symbol) or symbol).strip() or symbol
         token = instrument.get("instrument_token")
+
+        if (exchange, symbol) in saved_scan_keys:
+            if completed % supabase_batch_size == 0 or completed == len(universe):
+                _emit(
+                    progress_callback,
+                    phase="Already saved",
+                    completed=completed,
+                    total=len(universe),
+                    current_symbol=symbol,
+                )
+            continue
 
         _emit(
             progress_callback,
@@ -165,7 +201,7 @@ def run_scan(
 
         row = {
             "run_id": run_id,
-            "run_started_at": run_started.isoformat(),
+            "run_started_at": run_started_at,
             "scan_sequence": int(completed),
             "exchange": exchange,
             "symbol": symbol,
@@ -236,7 +272,7 @@ def run_scan(
         )
 
     all_results = score_minervini_universe(rows, config)
-    all_results = _attach_run_columns(all_results, run_id, run_started)
+    all_results = _attach_run_columns(all_results, run_id, run_started_at)
     if not all_results.empty:
         all_results = all_results.sort_values(
             ["passes_minervini", "minervini_pass_count", "relative_strength_rank", "symbol"],
@@ -264,7 +300,7 @@ def run_scan(
     run_completed = _now(config)
     summary = {
         "run_id": run_id,
-        "run_started_at": run_started.isoformat(),
+        "run_started_at": run_started_at,
         "run_completed_at": run_completed.isoformat(),
         "scan_date": str(today),
         "history_start_date": str(start_date),
@@ -434,12 +470,12 @@ def _now(config: dict[str, Any]) -> datetime:
     return datetime.now(ZoneInfo(timezone_name))
 
 
-def _attach_run_columns(frame: pd.DataFrame, run_id: str, run_started: datetime) -> pd.DataFrame:
+def _attach_run_columns(frame: pd.DataFrame, run_id: str, run_started_at: str) -> pd.DataFrame:
     if frame.empty:
         return frame
     enriched = frame.copy()
     enriched["run_id"] = run_id
-    enriched["run_started_at"] = run_started.isoformat()
+    enriched["run_started_at"] = run_started_at
     enriched["current_price"] = pd.to_numeric(enriched.get("close"), errors="coerce")
     enriched["price_source"] = "latest_close"
     return enriched

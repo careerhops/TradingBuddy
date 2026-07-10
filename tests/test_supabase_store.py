@@ -43,6 +43,20 @@ class RecordingSupabaseStore(SupabaseStore):
         return []
 
 
+class PagingSupabaseStore(RecordingSupabaseStore):
+    def __init__(self, total_rows: int) -> None:
+        super().__init__()
+        self.total_rows = total_rows
+        self.get_calls: list[dict[str, str]] = []
+
+    def _get(self, table: str, params: dict[str, str], error_label: str) -> list[dict[str, object]]:
+        self.get_calls.append(params)
+        offset = int(params.get("offset", 0))
+        limit = int(params.get("limit", 1000))
+        end = min(offset + limit, self.total_rows)
+        return [{"scan_sequence": index + 1, "symbol": f"SYM{index}"} for index in range(offset, end)]
+
+
 class SupabaseStoreTests(unittest.TestCase):
     def test_save_scan_result_marks_completed_after_child_tables(self) -> None:
         store = RecordingSupabaseStore()
@@ -73,6 +87,25 @@ class SupabaseStoreTests(unittest.TestCase):
 
         self.assertIsNotNone(store.latest_params)
         self.assertEqual(store.latest_params.get("run_completed_at"), "not.is.null")
+
+    def test_latest_incomplete_scan_run_filters_current_kite_run(self) -> None:
+        store = RecordingSupabaseStore()
+
+        store.load_latest_incomplete_scan_run("2026-07-10")
+
+        self.assertIsNotNone(store.latest_params)
+        self.assertEqual(store.latest_params.get("scan_date"), "eq.2026-07-10")
+        self.assertEqual(store.latest_params.get("refresh_mode"), "eq.kite_refresh")
+        self.assertEqual(store.latest_params.get("run_completed_at"), "is.null")
+
+    def test_load_scan_rows_paginates_past_1000_rows(self) -> None:
+        store = PagingSupabaseStore(total_rows=2305)
+
+        rows = store.load_scan_rows("run-1")
+
+        self.assertEqual(len(rows), 2305)
+        self.assertEqual([call.get("offset") for call in store.get_calls], ["0", "1000", "2000"])
+        self.assertEqual([call.get("limit") for call in store.get_calls], ["1000", "1000", "1000"])
 
     def test_save_scan_rows_upserts_in_100_row_batches(self) -> None:
         store = RecordingSupabaseStore()

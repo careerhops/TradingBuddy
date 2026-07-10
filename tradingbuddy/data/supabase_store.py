@@ -340,6 +340,21 @@ class SupabaseStore:
         )
         return rows[0] if rows else None
 
+    def load_latest_incomplete_scan_run(self, scan_date: str, refresh_mode: str = "kite_refresh") -> dict[str, Any] | None:
+        rows = self._get(
+            self.scan_runs_table,
+            params={
+                "select": "*",
+                "scan_date": f"eq.{scan_date}",
+                "refresh_mode": f"eq.{refresh_mode}",
+                "run_completed_at": "is.null",
+                "order": "run_started_at.desc",
+                "limit": "1",
+            },
+            error_label="Supabase incomplete scan run load failed",
+        )
+        return rows[0] if rows else None
+
     def load_scan_runs(self, limit: int = 100) -> pd.DataFrame:
         rows = self._get(
             self.scan_runs_table,
@@ -365,7 +380,7 @@ class SupabaseStore:
         return pd.DataFrame(rows)
 
     def load_scan_rows(self, run_id: str) -> pd.DataFrame:
-        rows = self._get(
+        rows = self._get_paginated(
             self.scan_rows_table,
             params={
                 "run_id": f"eq.{run_id}",
@@ -454,6 +469,27 @@ class SupabaseStore:
             message = response.text[:500] if response.text else response.reason
             raise RuntimeError(f"{error_label}: HTTP {response.status_code} {message}")
         return response.json()
+
+    def _get_paginated(
+        self,
+        table: str,
+        params: dict[str, str],
+        error_label: str,
+        page_size: int = 1000,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        size = max(int(page_size), 1)
+        while True:
+            page = self._get(
+                table,
+                params={**params, "limit": str(size), "offset": str(offset)},
+                error_label=error_label,
+            )
+            rows.extend(page)
+            if len(page) < size:
+                return rows
+            offset += size
 
     def _upsert(self, table: str, records: list[dict[str, Any]], conflict_column: str) -> None:
         if not records:
