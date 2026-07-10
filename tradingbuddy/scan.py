@@ -66,7 +66,7 @@ def run_scan(
     today = run_started.date()
     start_date = today - timedelta(days=365 * history_years)
     supabase = SupabaseStore.from_config(config)
-    supabase_batch_size = max(int(config.get("supabase", {}).get("scan_row_batch_size", 200)), 1)
+    supabase_batch_size = max(int(config.get("supabase", {}).get("scan_row_batch_size", 100)), 1)
 
     provider: KiteDataProvider | None = None
     if refresh_data:
@@ -178,8 +178,10 @@ def run_scan(
             **minervini_row,
             **weekly_row,
         }
-        rows.append(row)
-        scan_row_batch.append(row)
+        if supabase is not None:
+            scan_row_batch.append(row)
+        else:
+            rows.append(row)
 
         _emit(
             progress_callback,

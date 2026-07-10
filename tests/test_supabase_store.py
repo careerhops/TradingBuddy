@@ -74,7 +74,7 @@ class SupabaseStoreTests(unittest.TestCase):
         self.assertIsNotNone(store.latest_params)
         self.assertEqual(store.latest_params.get("run_completed_at"), "not.is.null")
 
-    def test_save_scan_rows_upserts_in_200_row_batches(self) -> None:
+    def test_save_scan_rows_upserts_in_100_row_batches(self) -> None:
         store = RecordingSupabaseStore()
         frame = pd.DataFrame(
             [
@@ -90,13 +90,15 @@ class SupabaseStoreTests(unittest.TestCase):
             ]
         )
 
-        store.save_scan_rows(frame, batch_size=200)
+        store.save_scan_rows(frame, batch_size=100)
 
         self.assertEqual(
             store.calls,
             [
-                ("upsert:scan_rows:run_id,exchange,symbol", 200),
-                ("upsert:scan_rows:run_id,exchange,symbol", 200),
+                ("upsert:scan_rows:run_id,exchange,symbol", 100),
+                ("upsert:scan_rows:run_id,exchange,symbol", 100),
+                ("upsert:scan_rows:run_id,exchange,symbol", 100),
+                ("upsert:scan_rows:run_id,exchange,symbol", 100),
                 ("upsert:scan_rows:run_id,exchange,symbol", 50),
             ],
         )

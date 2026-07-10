@@ -59,7 +59,6 @@ GITHUB_ACTIONS_TOKEN = "github-token-with-actions-write"
 GITHUB_REPOSITORY = "careerhops/TradingBuddy"
 GITHUB_WORKFLOW_ID = "run-scan.yml"
 GITHUB_BRANCH = "main"
-ALLOW_STREAMLIT_FULL_SCAN = "false"
 ```
 
 For Streamlit Community Cloud, update the Kite developer console redirect URL to the deployed Streamlit app URL. The redirect URL is the app's root URL, not an `/auth/...` callback path. Example:
@@ -78,7 +77,7 @@ If Kite redirects to an old URL such as the earlier `stock_signals` FastAPI URL,
 
 Only users with role `admin` can see the Kite login action, generate the Kite session, or start scans. Users with role `user` only see saved scan results and never see the Kite panel. The app never prints, displays, or writes `KITE_API_SECRET` or `SUPABASE_SERVICE_ROLE_KEY` into result CSVs.
 
-Fresh scans do not use a market-data cache. The GitHub Actions scanner fetches the two-year window from Kite on every run and writes raw per-symbol scan rows to Supabase in 200-stock batches while the scan is running.
+Fresh scans do not use a market-data cache. The scanner fetches the two-year window from Kite on every run and writes raw per-symbol scan rows to Supabase in 100-stock batches while the scan is running.
 
 Kite access tokens are short-lived. After admin login, the app saves the token for 24 hours to the ignored local runtime file `DATA_ROOT/secrets/kite_access_token.json`. If Supabase is configured, it also upserts the token into the private `tradingbuddy_kite_tokens` table with the same 24-hour expiry. Keep `DATA_ROOT` out of GitHub.
 
@@ -117,9 +116,9 @@ Run a cloud scan directly from GitHub:
 3. Click **Run workflow**.
 4. Leave `max_symbols` as `0` for a full refresh.
 
-The workflow runs `python scripts/run_scan.py --require-supabase`, writes raw scan rows to Supabase every 200 stocks, writes the final shortlist outputs to Supabase, and does not depend on your browser session staying open. The workflow fails if Supabase is not configured or if any required result table write fails. Streamlit reads the latest completed Supabase run when it is newer than local CSV results; incomplete runs are ignored until the Minervini, weekly, and overlap tables are saved.
+The workflow runs `python scripts/run_scan.py --require-supabase`, writes raw scan rows to Supabase every 100 stocks, writes the final shortlist outputs to Supabase, and does not depend on your browser session staying open. The workflow fails if Supabase is not configured or if any required result table write fails. Streamlit reads the latest completed Supabase run when it is newer than local CSV results; incomplete runs are ignored until the Minervini, weekly, and overlap tables are saved.
 
-The **Run scan in this Streamlit session** section is only for small local/debug scans. Full NSE scans are blocked there by default because they can be cancelled by Streamlit browser/session disconnects. To override that locally only, set `ALLOW_STREAMLIT_FULL_SCAN=true`.
+The **Run scan in this Streamlit session** section is enabled for full scans. Keep symbol limit as `0` to scan all NSE EQ stocks. With about 3306 stocks, the scanner writes roughly 34 Supabase batches before final shortlist tables are saved.
 
 ## Supabase Setup
 
@@ -128,7 +127,7 @@ Run [supabase/schema.sql](/Users/madhubhatt/Documents/TradingBuddy/supabase/sche
 The app writes:
 
 - `tradingbuddy_scan_runs`: one row per scan run with date/time, counts, and refresh status.
-- `tradingbuddy_scan_rows`: raw per-symbol scan rows upserted during the scan in 200-stock batches.
+- `tradingbuddy_scan_rows`: raw per-symbol scan rows upserted during the scan in 100-stock batches.
 - `tradingbuddy_minervini_shortlists`: stocks passing all 8 Minervini rules.
 - `tradingbuddy_weekly_buy_sell_shortlists`: fresh weekly BUY/SELL signals from the weekly strategy.
 - `tradingbuddy_overlap_history`: cumulative history for stocks that overlap Minervini pass and weekly BUY.

@@ -79,7 +79,6 @@ def _copy_streamlit_secrets_to_env() -> None:
         "GITHUB_REPOSITORY",
         "GITHUB_WORKFLOW_ID",
         "GITHUB_BRANCH",
-        "ALLOW_STREAMLIT_FULL_SCAN",
     ):
         try:
             value = secrets.get(key)
@@ -387,36 +386,21 @@ def _github_scan_panel() -> None:
 
 
 def _streamlit_session_scan_form(config: dict[str, Any], storage: Storage) -> None:
-    full_session_scan_allowed = _allow_streamlit_full_scan()
-    if full_session_scan_allowed:
-        st.warning("Full scans in Streamlit can stop if the browser disconnects. Prefer Durable Cloud Scan for full NSE runs.")
-        default_limit = 0
-        limit_help = "0 scans all symbols. Use only for local/debug runs."
-    else:
-        st.warning("In-session scans are for small tests only. Full NSE scans must use Durable Cloud Scan.")
-        default_limit = 100
-        limit_help = "Full-universe scans are disabled here to avoid browser/session cancellation."
+    st.info("In-session scans are enabled. Rows are written to Supabase every 100 stocks while the scan runs.")
 
     with st.form("run_scan"):
-        st.caption("Runs a fresh Kite scan. Cached-candle scans are disabled.")
+        st.caption("Runs a fresh Kite scan and writes rows to Supabase in 100-stock batches.")
         limit_symbols = st.number_input(
             "Session symbol limit",
             min_value=0,
             max_value=10000,
-            value=default_limit,
+            value=0,
             step=50,
-            help=limit_help,
+            help="0 scans all symbols. A 3306-stock scan writes about 34 Supabase batches.",
         )
         submitted = st.form_submit_button("Run fresh scan", type="primary")
 
     if not submitted:
-        return
-
-    if int(limit_symbols) == 0 and not full_session_scan_allowed:
-        st.error(
-            "Full NSE scans are disabled in the Streamlit session because they can be cancelled when the browser disconnects. "
-            "Use Durable Cloud Scan, or set ALLOW_STREAMLIT_FULL_SCAN=true only for local debugging."
-        )
         return
 
     progress_bar = st.progress(0)
@@ -586,10 +570,6 @@ def _github_dispatch_error_message(response: requests.Response) -> str:
     if response.status_code == 422:
         return f"{body}. Check GITHUB_BRANCH and workflow_dispatch inputs."
     return body
-
-
-def _allow_streamlit_full_scan() -> bool:
-    return os.getenv("ALLOW_STREAMLIT_FULL_SCAN", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _results_panel(config: dict[str, Any], storage: Storage) -> None:

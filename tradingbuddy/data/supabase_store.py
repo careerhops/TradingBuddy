@@ -232,7 +232,7 @@ class SupabaseStore:
     def save_minervini_shortlist(self, frame: pd.DataFrame) -> None:
         self._post_frame(self.minervini_table, frame, MINERVINI_COLUMNS)
 
-    def save_scan_rows(self, frame: pd.DataFrame, batch_size: int = 200) -> None:
+    def save_scan_rows(self, frame: pd.DataFrame, batch_size: int = 100) -> None:
         self._upsert_frame(
             self.scan_rows_table,
             frame,
@@ -413,7 +413,7 @@ class SupabaseStore:
         frame: pd.DataFrame,
         allowed_columns: set[str],
         conflict_column: str,
-        batch_size: int = 200,
+        batch_size: int = 100,
     ) -> None:
         if frame.empty:
             return
